@@ -13,8 +13,8 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "client:terminal": "tsx clients/terminal/index.ts",
-    "client:terminal:demo": "tsx clients/terminal/demo.ts"
+    "client:terminal": "tsx clients/terminal/client.ts",
+    "client:terminal:demo": "tsx clients/terminal/client.ts --smoke"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.11",

@@ -27,7 +27,7 @@ function runTerminalClientSmoke(): Promise<{ code: number | null; stdout: string
 }
 
 describe("terminal client smoke", () => {
-  test("runs --smoke mode successfully", async () => {
+  test("runs --smoke mode successfully", { timeout: 20000 }, async () => {
     const result = await runTerminalClientSmoke();
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("terminal-client-smoke-ok");

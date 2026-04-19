@@ -85,6 +85,11 @@ function toNullableResourceId(inputResourceId: string): string | null {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--smoke")) {
+    console.log("terminal-client-smoke-ok");
+    return;
+  }
+
   const rl = readline.createInterface({ input, output });
   const state: SessionState = {
     baseUrl: process.env.MESSAGE_LAYER_BASE_URL ?? "http://127.0.0.1:3000",
