@@ -3,7 +3,7 @@ import { connect } from "./db.js";
 import { loadServerConfig } from "./config.js";
 import { createApp } from "./http.js";
 import { MessageLayer } from "./service.js";
-import { createPlugins, runPluginSetup } from "./plugins.js";
+import { applyPluginsToApp, createPlugins } from "./plugins.js";
 
 async function main(): Promise<void> {
   const config = loadServerConfig(process.env);
@@ -11,24 +11,18 @@ async function main(): Promise<void> {
   const service = new MessageLayer(db);
   const app = createApp(service);
   const plugins = createPlugins(config.plugins);
-  await runPluginSetup(plugins, {
-    app,
-    service,
-    logger: (message: string) => {
-      console.log(message);
-    },
-    config,
-  });
-  for (const plugin of plugins) {
-    plugin.registerRoutes?.({
+  await applyPluginsToApp(
+    {
       app,
       service,
       logger: (message: string) => {
         console.log(message);
       },
       config,
-    });
-  }
+      env: process.env,
+    },
+    plugins,
+  );
 
   const port = config.port;
   serve(

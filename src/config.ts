@@ -1,6 +1,6 @@
 import type { StorageAdapter } from "./db.js";
 
-export type PluginConfigEntry = {
+export type PluginConfigEntry = string | {
   name: string;
   options?: Record<string, unknown>;
 };
@@ -29,26 +29,26 @@ function parsePluginsFromEnv(value: string | undefined): PluginConfigEntry[] {
     .map((name) => ({ name }));
 }
 
-export function defaultServerConfig(): ServerConfig {
-  const adapter = parseStorageAdapter(process.env.STORAGE_ADAPTER);
+export function defaultServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const adapter = parseStorageAdapter(env.STORAGE_ADAPTER);
   return {
-    port: Number(process.env.PORT ?? "3000"),
+    port: Number(env.PORT ?? "3000"),
     storage: {
       adapter,
-      path: process.env.STORAGE_PATH ?? (adapter === "sqlite" ? ":memory:" : "memory://server"),
+      path: env.STORAGE_PATH ?? (adapter === "sqlite" ? ":memory:" : "memory://server"),
     },
-    plugins: parsePluginsFromEnv(process.env.PLUGINS),
+    plugins: parsePluginsFromEnv(env.PLUGINS),
   };
 }
 
-export function loadServerConfig(): ServerConfig {
-  const raw = process.env.MESSAGE_LAYER_CONFIG;
+export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const raw = env.MESSAGE_LAYER_CONFIG;
   if (!raw) {
-    return defaultServerConfig();
+    return defaultServerConfig(env);
   }
 
   const parsed = JSON.parse(raw) as Partial<ServerConfig>;
-  const defaults = defaultServerConfig();
+  const defaults = defaultServerConfig(env);
 
   return {
     port: parsed.port ?? defaults.port,
@@ -58,4 +58,8 @@ export function loadServerConfig(): ServerConfig {
     },
     plugins: parsed.plugins ?? defaults.plugins,
   };
+}
+
+export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  return parseServerConfig(env);
 }

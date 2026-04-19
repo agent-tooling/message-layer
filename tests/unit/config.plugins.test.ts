@@ -38,9 +38,8 @@ describe("server config and plugin system", () => {
     const app = createApp(service);
 
     const events: string[] = [];
-    const logger = {
-      info: (msg: string) => events.push(msg),
-      error: () => {},
+    const logger = (msg: string) => {
+      events.push(msg);
     };
 
     const plugins = instantiatePlugins(
@@ -48,27 +47,27 @@ describe("server config and plugin system", () => {
         { name: "request-logging", options: { redactHeaders: ["x-secret"] } },
         { name: "health-meta" },
       ],
-      logger,
     );
 
-    for (const plugin of plugins) {
-      await plugin.setup?.({ logger, config: { port: 3000, storage: { adapter: "pglite", path: "memory://plugin-unit" }, plugins: [] } });
-      plugin.registerRoutes?.(app as Hono, {
-        logger,
-        config: { port: 3000, storage: { adapter: "pglite", path: "memory://plugin-unit" }, plugins: [] },
-      });
-    }
+    const pluginCtx = {
+      app: app as Hono,
+      service,
+      logger,
+      env: process.env,
+      config: { port: 3000, storage: { adapter: "pglite", path: "memory://plugin-unit" }, plugins: [] },
+    };
+    const { applyPluginsToApp } = await import("../../src/plugins.js");
+    await applyPluginsToApp(pluginCtx, plugins);
 
-    const health = await app.request("http://localhost/health");
+    const health = await app.fetch(new Request("http://localhost/health"));
     expect(health.status).toBe(200);
 
-    const pluginHealth = await app.request("http://localhost/.well-known/plugin-health");
+    const pluginHealth = await app.fetch(new Request("http://localhost/health/meta"));
     expect(pluginHealth.status).toBe(200);
     const body = await pluginHealth.json();
-    expect(body).toMatchObject({ ok: true });
+    expect(body).toMatchObject({ ok: true, adapter: "pglite" });
 
-    expect(events.some((line) => line.includes("plugin.request-logging"))).toBe(true);
-    expect(events.some((line) => line.includes("plugin.health-meta"))).toBe(true);
+    expect(events.some((line) => line.includes("GET /health"))).toBe(true);
 
     await db.close?.();
   });
