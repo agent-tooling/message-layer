@@ -52,6 +52,17 @@ export class PermissionError extends Error {
   }
 }
 
+export function stableJsonRecord(input: Record<string, unknown>): string {
+  return JSON.stringify(input, Object.keys(input).sort());
+}
+
+export function parseJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    return JSON.parse(value) as Record<string, unknown>;
+  }
+  return (value ?? {}) as Record<string, unknown>;
+}
+
 export class MessageLayer {
   constructor(public readonly db: SqlDatabase) {}
 
@@ -79,24 +90,13 @@ export class MessageLayer {
     }
   }
 
-  private stableJson(input: Record<string, unknown>): string {
-    return JSON.stringify(input, Object.keys(input).sort());
-  }
-
-  private parseJsonRecord(value: unknown): Record<string, unknown> {
-    if (typeof value === "string") {
-      return JSON.parse(value) as Record<string, unknown>;
-    }
-    return (value ?? {}) as Record<string, unknown>;
-  }
-
   private async appendAudit(orgId: string, eventType: EventType, payload: Record<string, unknown>, createdAt: string): Promise<void> {
     const prev = await this.queryOne<{ event_hash: string | null }>(
       "SELECT event_hash FROM audit_events WHERE org_id=? ORDER BY audit_seq DESC LIMIT 1",
       [orgId],
     );
     const prevHash = prev?.event_hash ?? "";
-    const payloadJson = this.stableJson(payload);
+    const payloadJson = stableJsonRecord(payload);
     const payloadHashView = payloadJson;
     const eventHash = createHash("sha256")
       .update(`${prevHash}|${eventType}|${payloadHashView}|${createdAt}`)
@@ -123,7 +123,7 @@ export class MessageLayer {
         input.orgId,
         input.streamId ?? null,
         input.eventType,
-        this.stableJson(input.payload),
+        stableJsonRecord(input.payload),
         input.streamSeq ?? null,
         createdAt,
       ],
@@ -276,7 +276,7 @@ export class MessageLayer {
       for (const [idx, part] of parts.entries()) {
         await tx.query(
           "INSERT INTO message_parts(id,message_id,part_index,part_type,payload_json) VALUES (?,?,?,?,?)",
-          [this.id(), messageId, idx, part.type, this.stableJson(part.payload)],
+          [this.id(), messageId, idx, part.type, stableJsonRecord(part.payload)],
         );
       }
       await this.appendEvent({
@@ -318,7 +318,7 @@ export class MessageLayer {
         parts: parts.map((p) => ({
           index: Number(p.part_index),
           type: partTypeSchema.parse(p.part_type),
-          payload: this.parseJsonRecord(p.payload_json),
+          payload: parseJsonRecord(p.payload_json),
         })),
       });
     }
@@ -339,7 +339,7 @@ export class MessageLayer {
       this.ensureEventType(row.event_type);
       return {
         type: row.event_type,
-        payload: this.parseJsonRecord(row.payload_json),
+        payload: parseJsonRecord(row.payload_json),
         streamSeq: row.stream_seq === null ? null : Number(row.stream_seq),
         createdAt: row.created_at,
       };
@@ -386,7 +386,7 @@ export class MessageLayer {
         resourceId,
         capability,
         expiresAt,
-        this.stableJson(constraints),
+        stableJsonRecord(constraints),
         principal.actorId,
         this.now(),
       ],
@@ -473,7 +473,7 @@ export class MessageLayer {
       principal.orgId,
       principal.actorId,
       endpoint,
-      this.stableJson(metadata),
+      stableJsonRecord(metadata),
       this.now(),
     ]);
     return clientId;
@@ -486,7 +486,7 @@ export class MessageLayer {
     );
     return rows.map((row) => ({
       eventType: row.event_type,
-      payload: this.parseJsonRecord(row.payload_json),
+      payload: parseJsonRecord(row.payload_json),
       eventHash: row.event_hash,
       createdAt: row.created_at,
     }));

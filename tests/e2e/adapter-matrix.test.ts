@@ -13,6 +13,8 @@ import type { Principal } from "../../src/types.js";
 
 type AdapterFactory = (id: string) => Promise<SqlDatabase>;
 
+// This suite intentionally uses real storage adapters only (pglite/sqlite).
+// No mocks, spies, or fakes are allowed here.
 const adapterFactories: Array<{ name: StorageAdapter; create: AdapterFactory }> = [
   {
     name: "pglite",
