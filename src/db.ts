@@ -1,0 +1,297 @@
+import { PGlite } from "@electric-sql/pglite";
+import { DatabaseSync } from "node:sqlite";
+
+const BASE_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS organizations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS actors (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('human', 'agent', 'app')),
+  display_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id)
+);
+
+CREATE TABLE IF NOT EXISTS memberships (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  channel_id TEXT,
+  role TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS channels (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  visibility TEXT NOT NULL DEFAULT 'private',
+  created_by_actor_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
+  parent_message_id TEXT NOT NULL,
+  visibility TEXT NOT NULL DEFAULT 'private',
+  created_by_actor_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS stream_counters (
+  stream_id TEXT PRIMARY KEY,
+  next_seq INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  stream_id TEXT NOT NULL,
+  stream_type TEXT NOT NULL CHECK (stream_type IN ('channel', 'thread')),
+  actor_id TEXT NOT NULL,
+  stream_seq INTEGER NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  redacted INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (org_id, stream_id, actor_id, idempotency_key),
+  UNIQUE (stream_id, stream_seq)
+);
+
+CREATE TABLE IF NOT EXISTS message_parts (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  part_index INTEGER NOT NULL,
+  part_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  UNIQUE (message_id, part_index)
+);
+
+CREATE TABLE IF NOT EXISTS cursors (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  stream_id TEXT NOT NULL,
+  last_seen_seq INTEGER NOT NULL,
+  last_ack_seq INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (org_id, actor_id, stream_id)
+);
+
+CREATE TABLE IF NOT EXISTS grants (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  capability TEXT NOT NULL,
+  expires_at TEXT,
+  constraints_json TEXT NOT NULL DEFAULT '{}',
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by_actor_id TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS permission_requests (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  resource_type TEXT NOT NULL,
+  resource_id TEXT,
+  status TEXT NOT NULL CHECK (status IN ('open', 'approved', 'denied')),
+  resolution_notes TEXT,
+  resolver_actor_id TEXT,
+  grant_id TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS clients (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  stream_id TEXT,
+  event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  stream_seq INTEGER,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  __AUDIT_SEQ_COLUMN__,
+  id TEXT NOT NULL UNIQUE,
+  org_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  prev_hash TEXT,
+  event_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+`;
+
+const SCHEMA_SQL_PGLITE = BASE_SCHEMA_SQL.replace(
+  "__AUDIT_SEQ_COLUMN__",
+  "audit_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
+);
+const SCHEMA_SQL_SQLITE = BASE_SCHEMA_SQL.replace(
+  "__AUDIT_SEQ_COLUMN__",
+  "audit_seq INTEGER PRIMARY KEY AUTOINCREMENT",
+);
+
+export type SqlValue = string | number | null;
+
+export interface QueryResultRow {
+  [key: string]: unknown;
+}
+
+export interface DbClient {
+  query<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params?: SqlValue[],
+  ): Promise<{ rows: T[] }>;
+}
+
+export interface SqlDatabase extends DbClient {
+  adapter: StorageAdapter;
+  tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T>;
+  close?(): Promise<void> | void;
+}
+
+function rewritePositionalParams(sql: string): string {
+  let i = 0;
+  return sql.replaceAll("?", () => {
+    i += 1;
+    return `$${i}`;
+  });
+}
+
+class PgliteClient implements SqlDatabase {
+  readonly adapter = "pglite" as const;
+
+  constructor(private readonly db: PGlite) {}
+
+  async query<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params: SqlValue[] = [],
+  ): Promise<{ rows: T[] }> {
+    const result = await this.db.query<T>(rewritePositionalParams(sql), params);
+    return { rows: result.rows ?? [] };
+  }
+
+  async tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T> {
+    await this.db.exec("BEGIN");
+    try {
+      const txClient: DbClient = {
+        query: async <R extends QueryResultRow = QueryResultRow>(
+          sql: string,
+          params: SqlValue[] = [],
+        ) => {
+          const result = await this.db.query<R>(rewritePositionalParams(sql), params);
+          return { rows: result.rows ?? [] };
+        },
+      };
+      const output = await fn(txClient);
+      await this.db.exec("COMMIT");
+      return output;
+    } catch (error) {
+      await this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.db.close();
+  }
+}
+
+function normalizeSqliteParams(sql: string): string {
+  return sql.replaceAll(/\$\d+/g, "?");
+}
+
+class SqliteClient implements SqlDatabase {
+  readonly adapter = "sqlite" as const;
+
+  constructor(private readonly db: DatabaseSync) {}
+
+  async query<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params: SqlValue[] = [],
+  ): Promise<{ rows: T[] }> {
+    const stmt = this.db.prepare(normalizeSqliteParams(sql));
+    const upperSql = sql.trim().toUpperCase();
+    if (upperSql.startsWith("SELECT")) {
+      const rows = stmt.all(...params) as T[];
+      return { rows };
+    }
+    stmt.run(...params);
+    return { rows: [] };
+  }
+
+  async tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T> {
+    this.db.exec("BEGIN");
+    try {
+      const output = await fn({
+        query: async <R extends QueryResultRow = QueryResultRow>(
+          sql: string,
+          params: SqlValue[] = [],
+        ) => {
+          const stmt = this.db.prepare(normalizeSqliteParams(sql));
+          const upperSql = sql.trim().toUpperCase();
+          if (upperSql.startsWith("SELECT")) {
+            const rows = stmt.all(...params) as R[];
+            return { rows };
+          }
+          stmt.run(...params);
+          return { rows: [] };
+        },
+      });
+      this.db.exec("COMMIT");
+      return output;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  close(): void {
+    this.db.close();
+  }
+}
+
+export async function createPgliteDatabase(path = "memory://"): Promise<SqlDatabase> {
+  const db = new PGlite(path);
+  await db.exec(SCHEMA_SQL_PGLITE);
+  return new PgliteClient(db);
+}
+
+export async function createSqliteDatabase(path = ":memory:"): Promise<SqlDatabase> {
+  const db = new DatabaseSync(path);
+  db.exec(SCHEMA_SQL_SQLITE);
+  return new SqliteClient(db);
+}
+
+export type StorageAdapter = "pglite" | "sqlite";
+
+export async function connect(path = "memory://", adapter: StorageAdapter = "pglite"): Promise<SqlDatabase> {
+  if (adapter === "sqlite") {
+    const sqlitePath = path === "memory://" ? ":memory:" : path;
+    return createSqliteDatabase(sqlitePath);
+  }
+  return createPgliteDatabase(path);
+}
