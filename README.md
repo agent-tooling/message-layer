@@ -38,6 +38,13 @@ Start the server:
 
 `pnpm dev`
 
+Run the terminal client (in another terminal):
+
+`pnpm client:terminal`
+
+The terminal client is in `clients/terminal/` and is intended for quick manual
+exploration of the core APIs.
+
 Server endpoint:
 
 - `GET /health`

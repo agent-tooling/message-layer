@@ -12,7 +12,9 @@
     "start": "node --enable-source-maps dist/server.js",
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "client:terminal": "tsx clients/terminal/index.ts",
+    "client:terminal:demo": "tsx clients/terminal/demo.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.11",
