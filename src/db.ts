@@ -1,11 +1,11 @@
 import { PGlite } from "@electric-sql/pglite";
 import { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_SQL_PG = `
+const BASE_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS actors (
@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS actors (
   org_id TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('human', 'agent', 'app')),
   display_name TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL,
+  created_at TEXT NOT NULL,
   FOREIGN KEY (org_id) REFERENCES organizations(id)
 );
 
@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS memberships (
   actor_id TEXT NOT NULL,
   channel_id TEXT,
   role TEXT NOT NULL,
-  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS channels (
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS channels (
   name TEXT NOT NULL,
   visibility TEXT NOT NULL DEFAULT 'private',
   created_by_actor_id TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS threads (
@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS threads (
   parent_message_id TEXT NOT NULL,
   visibility TEXT NOT NULL DEFAULT 'private',
   created_by_actor_id TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS stream_counters (
@@ -59,8 +59,8 @@ CREATE TABLE IF NOT EXISTS messages (
   actor_id TEXT NOT NULL,
   stream_seq INTEGER NOT NULL,
   idempotency_key TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL,
-  redacted BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TEXT NOT NULL,
+  redacted INTEGER NOT NULL DEFAULT 0,
   UNIQUE (org_id, stream_id, actor_id, idempotency_key),
   UNIQUE (stream_id, stream_seq)
 );
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS message_parts (
   message_id TEXT NOT NULL,
   part_index INTEGER NOT NULL,
   part_type TEXT NOT NULL,
-  payload_json JSONB NOT NULL,
+  payload_json TEXT NOT NULL,
   UNIQUE (message_id, part_index)
 );
 
@@ -81,7 +81,7 @@ CREATE TABLE IF NOT EXISTS cursors (
   stream_id TEXT NOT NULL,
   last_seen_seq INTEGER NOT NULL,
   last_ack_seq INTEGER NOT NULL,
-  updated_at TIMESTAMPTZ NOT NULL,
+  updated_at TEXT NOT NULL,
   UNIQUE (org_id, actor_id, stream_id)
 );
 
@@ -92,11 +92,11 @@ CREATE TABLE IF NOT EXISTS grants (
   resource_type TEXT NOT NULL,
   resource_id TEXT,
   capability TEXT NOT NULL,
-  expires_at TIMESTAMPTZ,
-  constraints_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-  active BOOLEAN NOT NULL DEFAULT TRUE,
+  expires_at TEXT,
+  constraints_json TEXT NOT NULL DEFAULT '{}',
+  active INTEGER NOT NULL DEFAULT 1,
   created_by_actor_id TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS permission_requests (
@@ -110,8 +110,8 @@ CREATE TABLE IF NOT EXISTS permission_requests (
   resolution_notes TEXT,
   resolver_actor_id TEXT,
   grant_id TEXT,
-  created_at TIMESTAMPTZ NOT NULL,
-  resolved_at TIMESTAMPTZ
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS clients (
@@ -119,8 +119,8 @@ CREATE TABLE IF NOT EXISTS clients (
   org_id TEXT NOT NULL,
   actor_id TEXT NOT NULL,
   endpoint TEXT NOT NULL,
-  metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -128,24 +128,33 @@ CREATE TABLE IF NOT EXISTS events (
   org_id TEXT NOT NULL,
   stream_id TEXT,
   event_type TEXT NOT NULL,
-  payload_json JSONB NOT NULL,
+  payload_json TEXT NOT NULL,
   stream_seq INTEGER,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS audit_events (
-  audit_seq BIGINT GENERATED ALWAYS AS IDENTITY,
-  id TEXT PRIMARY KEY,
+  __AUDIT_SEQ_COLUMN__,
+  id TEXT NOT NULL UNIQUE,
   org_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
-  payload_json JSONB NOT NULL,
+  payload_json TEXT NOT NULL,
   prev_hash TEXT,
   event_hash TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
 `;
 
-export type SqlValue = string | number | boolean | null;
+const SCHEMA_SQL_PGLITE = BASE_SCHEMA_SQL.replace(
+  "__AUDIT_SEQ_COLUMN__",
+  "audit_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
+);
+const SCHEMA_SQL_SQLITE = BASE_SCHEMA_SQL.replace(
+  "__AUDIT_SEQ_COLUMN__",
+  "audit_seq INTEGER PRIMARY KEY AUTOINCREMENT",
+);
+
+export type SqlValue = string | number | null;
 
 export interface QueryResultRow {
   [key: string]: unknown;
@@ -159,6 +168,7 @@ export interface DbClient {
 }
 
 export interface SqlDatabase extends DbClient {
+  adapter: StorageAdapter;
   tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;
 }
@@ -172,6 +182,8 @@ function rewritePositionalParams(sql: string): string {
 }
 
 class PgliteClient implements SqlDatabase {
+  readonly adapter = "pglite" as const;
+
   constructor(private readonly db: PGlite) {}
 
   async query<T extends QueryResultRow = QueryResultRow>(
@@ -208,21 +220,13 @@ class PgliteClient implements SqlDatabase {
   }
 }
 
-function normalizeSqliteSchema(sql: string): string {
-  return sql
-    .replaceAll("TIMESTAMPTZ", "TEXT")
-    .replaceAll("BOOLEAN", "INTEGER")
-    .replaceAll("JSONB", "TEXT")
-    .replaceAll("DEFAULT '{}'::jsonb", "DEFAULT '{}'")
-    .replaceAll("GENERATED ALWAYS AS IDENTITY", "AUTOINCREMENT")
-    .replaceAll("BIGINT", "INTEGER");
-}
-
 function normalizeSqliteParams(sql: string): string {
   return sql.replaceAll(/\$\d+/g, "?");
 }
 
 class SqliteClient implements SqlDatabase {
+  readonly adapter = "sqlite" as const;
+
   constructor(private readonly db: DatabaseSync) {}
 
   async query<T extends QueryResultRow = QueryResultRow>(
@@ -272,13 +276,13 @@ class SqliteClient implements SqlDatabase {
 
 export async function createPgliteDatabase(path = "memory://"): Promise<SqlDatabase> {
   const db = new PGlite(path);
-  await db.exec(SCHEMA_SQL_PG);
+  await db.exec(SCHEMA_SQL_PGLITE);
   return new PgliteClient(db);
 }
 
 export async function createSqliteDatabase(path = ":memory:"): Promise<SqlDatabase> {
   const db = new DatabaseSync(path);
-  db.exec(normalizeSqliteSchema(SCHEMA_SQL_PG));
+  db.exec(SCHEMA_SQL_SQLITE);
   return new SqliteClient(db);
 }
 

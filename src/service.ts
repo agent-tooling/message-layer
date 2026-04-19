@@ -64,7 +64,7 @@ export class MessageLayer {
   }
 
   private async query<T extends DbRow = DbRow>(sql: string, params: unknown[] = []): Promise<T[]> {
-    const result = await this.db.query<T>(sql, params as Array<string | number | boolean | null>);
+    const result = await this.db.query<T>(sql, params as Array<string | number | null>);
     return result.rows;
   }
 
@@ -83,12 +83,11 @@ export class MessageLayer {
     return JSON.stringify(input, Object.keys(input).sort());
   }
 
-  private async canonicalPayloadForHash(input: Record<string, unknown>): Promise<string> {
-    const rows = await this.query<{ payload: Record<string, unknown> }>(
-      "SELECT ?::jsonb AS payload",
-      [this.stableJson(input)],
-    );
-    return JSON.stringify(rows[0]?.payload ?? {});
+  private parseJsonRecord(value: unknown): Record<string, unknown> {
+    if (typeof value === "string") {
+      return JSON.parse(value) as Record<string, unknown>;
+    }
+    return (value ?? {}) as Record<string, unknown>;
   }
 
   private async appendAudit(orgId: string, eventType: EventType, payload: Record<string, unknown>, createdAt: string): Promise<void> {
@@ -98,7 +97,7 @@ export class MessageLayer {
     );
     const prevHash = prev?.event_hash ?? "";
     const payloadJson = this.stableJson(payload);
-    const payloadHashView = await this.canonicalPayloadForHash(payload);
+    const payloadHashView = payloadJson;
     const eventHash = createHash("sha256")
       .update(`${prevHash}|${eventType}|${payloadHashView}|${createdAt}`)
       .digest("hex");
@@ -150,7 +149,7 @@ export class MessageLayer {
     }
     const row = await this.queryOne(
       `SELECT 1 FROM grants
-       WHERE org_id=? AND actor_id=? AND capability=? AND resource_type=? AND active=true
+       WHERE org_id=? AND actor_id=? AND capability=? AND resource_type=? AND active=1
          AND (resource_id IS NULL OR resource_id=?)
          AND (expires_at IS NULL OR expires_at>?)
        LIMIT 1`,
@@ -271,7 +270,7 @@ export class MessageLayer {
       const messageId = this.id();
       const streamSeq = await this.nextSeq(input.streamId);
       await tx.query(
-        "INSERT INTO messages(id,org_id,stream_id,stream_type,actor_id,stream_seq,idempotency_key,created_at,redacted) VALUES (?,?,?,?,?,?,?,?,false)",
+        "INSERT INTO messages(id,org_id,stream_id,stream_type,actor_id,stream_seq,idempotency_key,created_at,redacted) VALUES (?,?,?,?,?,?,?,?,0)",
         [messageId, principal.orgId, input.streamId, streamType, principal.actorId, streamSeq, input.idempotencyKey, this.now()],
       );
       for (const [idx, part] of parts.entries()) {
@@ -301,8 +300,8 @@ export class MessageLayer {
 
   async listMessages(principal: Principal, streamId: string, afterSeq = 0, limit = 50): Promise<MessageRecord[]> {
     await this.assertOrgActor(principal);
-    const rows = await this.query<{ id: string; stream_seq: number; actor_id: string }>(
-      "SELECT id,stream_seq,actor_id FROM messages WHERE org_id=? AND stream_id=? AND stream_seq>? ORDER BY stream_seq ASC LIMIT ?",
+    const rows = await this.query<{ id: string; stream_seq: number; actor_id: string; created_at: string }>(
+      "SELECT id,stream_seq,actor_id,created_at FROM messages WHERE org_id=? AND stream_id=? AND stream_seq>? ORDER BY stream_seq ASC LIMIT ?",
       [principal.orgId, streamId, afterSeq, limit],
     );
     const out: MessageRecord[] = [];
@@ -315,11 +314,11 @@ export class MessageLayer {
         id: row.id,
         streamSeq: Number(row.stream_seq),
         actorId: row.actor_id,
-        createdAt: "",
+        createdAt: row.created_at,
         parts: parts.map((p) => ({
           index: Number(p.part_index),
           type: partTypeSchema.parse(p.part_type),
-          payload: p.payload_json,
+          payload: this.parseJsonRecord(p.payload_json),
         })),
       });
     }
@@ -340,7 +339,7 @@ export class MessageLayer {
       this.ensureEventType(row.event_type);
       return {
         type: row.event_type,
-        payload: row.payload_json,
+        payload: this.parseJsonRecord(row.payload_json),
         streamSeq: row.stream_seq === null ? null : Number(row.stream_seq),
         createdAt: row.created_at,
       };
@@ -378,7 +377,7 @@ export class MessageLayer {
     }
     const grantId = this.id();
     await this.query(
-      "INSERT INTO grants(id,org_id,actor_id,resource_type,resource_id,capability,expires_at,constraints_json,active,created_by_actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,true,?,?)",
+      "INSERT INTO grants(id,org_id,actor_id,resource_type,resource_id,capability,expires_at,constraints_json,active,created_by_actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)",
       [
         grantId,
         principal.orgId,
@@ -404,7 +403,7 @@ export class MessageLayer {
     if (!principal.scopes.includes("grant:create")) {
       throw new PermissionError("missing grant:create");
     }
-    await this.query("UPDATE grants SET active=false WHERE id=? AND org_id=?", [grantId, principal.orgId]);
+    await this.query("UPDATE grants SET active=0 WHERE id=? AND org_id=?", [grantId, principal.orgId]);
     await this.appendEvent({
       orgId: principal.orgId,
       eventType: "grant.revoked",
@@ -487,7 +486,7 @@ export class MessageLayer {
     );
     return rows.map((row) => ({
       eventType: row.event_type,
-      payload: row.payload_json,
+      payload: this.parseJsonRecord(row.payload_json),
       eventHash: row.event_hash,
       createdAt: row.created_at,
     }));

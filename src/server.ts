@@ -8,7 +8,7 @@ async function main(): Promise<void> {
   const path =
     process.env.STORAGE_PATH ??
     (adapter === "sqlite" ? ":memory:" : "memory://server");
-  const db = await connect(path, { adapter });
+  const db = await connect(path, adapter);
   const service = new MessageLayer(db);
   const app = createApp(service);
   const port = Number(process.env.PORT ?? "3000");
