@@ -1,6 +1,7 @@
 import { PGlite } from "@electric-sql/pglite";
+import { DatabaseSync } from "node:sqlite";
 
-const SCHEMA_SQL = `
+const SCHEMA_SQL_PG = `
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -159,10 +160,7 @@ export interface DbClient {
 
 export interface SqlDatabase extends DbClient {
   tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T>;
-}
-
-function toSql(sql: string): string {
-  return sql.replaceAll("?", "$1");
+  close?(): Promise<void> | void;
 }
 
 function rewritePositionalParams(sql: string): string {
@@ -204,13 +202,92 @@ class PgliteClient implements SqlDatabase {
       throw error;
     }
   }
+
+  async close(): Promise<void> {
+    await this.db.close();
+  }
+}
+
+function normalizeSqliteSchema(sql: string): string {
+  return sql
+    .replaceAll("TIMESTAMPTZ", "TEXT")
+    .replaceAll("BOOLEAN", "INTEGER")
+    .replaceAll("JSONB", "TEXT")
+    .replaceAll("DEFAULT '{}'::jsonb", "DEFAULT '{}'")
+    .replaceAll("GENERATED ALWAYS AS IDENTITY", "AUTOINCREMENT")
+    .replaceAll("BIGINT", "INTEGER");
+}
+
+function normalizeSqliteParams(sql: string): string {
+  return sql.replaceAll(/\$\d+/g, "?");
+}
+
+class SqliteClient implements SqlDatabase {
+  constructor(private readonly db: DatabaseSync) {}
+
+  async query<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params: SqlValue[] = [],
+  ): Promise<{ rows: T[] }> {
+    const stmt = this.db.prepare(normalizeSqliteParams(sql));
+    const upperSql = sql.trim().toUpperCase();
+    if (upperSql.startsWith("SELECT")) {
+      const rows = stmt.all(...params) as T[];
+      return { rows };
+    }
+    stmt.run(...params);
+    return { rows: [] };
+  }
+
+  async tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T> {
+    this.db.exec("BEGIN");
+    try {
+      const output = await fn({
+        query: async <R extends QueryResultRow = QueryResultRow>(
+          sql: string,
+          params: SqlValue[] = [],
+        ) => {
+          const stmt = this.db.prepare(normalizeSqliteParams(sql));
+          const upperSql = sql.trim().toUpperCase();
+          if (upperSql.startsWith("SELECT")) {
+            const rows = stmt.all(...params) as R[];
+            return { rows };
+          }
+          stmt.run(...params);
+          return { rows: [] };
+        },
+      });
+      this.db.exec("COMMIT");
+      return output;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  close(): void {
+    this.db.close();
+  }
 }
 
 export async function createPgliteDatabase(path = "memory://"): Promise<SqlDatabase> {
   const db = new PGlite(path);
-  await db.exec(SCHEMA_SQL);
+  await db.exec(SCHEMA_SQL_PG);
   return new PgliteClient(db);
 }
 
-// Backward-compatible alias used by tests and sample flows.
-export const connect = createPgliteDatabase;
+export async function createSqliteDatabase(path = ":memory:"): Promise<SqlDatabase> {
+  const db = new DatabaseSync(path);
+  db.exec(normalizeSqliteSchema(SCHEMA_SQL_PG));
+  return new SqliteClient(db);
+}
+
+export type StorageAdapter = "pglite" | "sqlite";
+
+export async function connect(path = "memory://", adapter: StorageAdapter = "pglite"): Promise<SqlDatabase> {
+  if (adapter === "sqlite") {
+    const sqlitePath = path === "memory://" ? ":memory:" : path;
+    return createSqliteDatabase(sqlitePath);
+  }
+  return createPgliteDatabase(path);
+}

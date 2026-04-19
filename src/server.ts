@@ -4,7 +4,11 @@ import { createApp } from "./http.js";
 import { MessageLayer } from "./service.js";
 
 async function main(): Promise<void> {
-  const db = await connect("memory://server");
+  const adapter = process.env.STORAGE_ADAPTER === "sqlite" ? "sqlite" : "pglite";
+  const path =
+    process.env.STORAGE_PATH ??
+    (adapter === "sqlite" ? ":memory:" : "memory://server");
+  const db = await connect(path, { adapter });
   const service = new MessageLayer(db);
   const app = createApp(service);
   const port = Number(process.env.PORT ?? "3000");
