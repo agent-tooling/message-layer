@@ -133,13 +133,14 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE TABLE IF NOT EXISTS audit_events (
+  audit_seq BIGINT GENERATED ALWAYS AS IDENTITY,
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
   payload_json JSONB NOT NULL,
   prev_hash TEXT,
   event_hash TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL
+  created_at TEXT NOT NULL
 );
 `;
 
@@ -210,3 +211,6 @@ export async function createPgliteDatabase(path = "memory://"): Promise<SqlDatab
   await db.exec(SCHEMA_SQL);
   return new PgliteClient(db);
 }
+
+// Backward-compatible alias used by tests and sample flows.
+export const connect = createPgliteDatabase;
