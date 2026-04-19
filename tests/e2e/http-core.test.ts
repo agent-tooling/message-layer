@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { connect, type StorageAdapter } from "../../src/db.js";
 import { createApp } from "../../src/http.js";
+import { applyPluginsToApp, resolvePlugins } from "../../src/plugins.js";
 import { MessageLayer } from "../../src/service.js";
 import type { Principal } from "../../src/types.js";
 
@@ -29,6 +30,18 @@ for (const adapter of adapters) {
       try {
         const svc = new MessageLayer(db);
         const app = createApp(svc);
+        const pluginContext = {
+          app,
+          service: svc,
+          config: {
+            port: 0,
+            storage: { adapter: adapter.name, path: adapter.pathFor("cfg") },
+            plugins: [],
+          },
+          logger: console,
+        };
+        const plugins = resolvePlugins([]);
+        applyPluginsToApp(pluginContext, plugins);
 
         const orgRes = await app.request("http://localhost/v1/orgs", {
           method: "POST",
