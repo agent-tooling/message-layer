@@ -102,6 +102,31 @@ cp .env.local.example .env.local
 bun run dev
 ```
 
+## Next.js team client (Better Auth + Agent onboarding)
+
+`clients/nextjs-team-client` is a team-first example app that treats message-layer as the control plane:
+
+- Better Auth login/session management
+- invite-link onboarding flow (`/invite/accept`)
+- channel/thread/message operations through server-side principal mapping
+- local attachment uploads as `artifact` message parts
+- Agent Auth discovery + token verification endpoints for external agents
+
+Run:
+
+```
+bun run client:nextjs-team
+```
+
+Setup:
+
+```
+cd clients/nextjs-team-client
+cp .env.local.example .env.local
+bun install
+bun run dev
+```
+
 ## HTTP API
 
 | Method | Path | Description |
@@ -110,7 +135,9 @@ bun run dev
 | POST | /v1/orgs | create org |
 | POST | /v1/actors | create actor |
 | POST | /v1/channels | create channel |
+| GET | /v1/channels | list channels for principal |
 | POST | /v1/threads | create thread |
+| GET | /v1/channels/:channelId/threads | list threads in a channel |
 | POST | /v1/messages | append message |
 | GET | /v1/streams/:id/messages | list messages |
 | GET | /v1/streams/:id/subscribe | replay events |
@@ -121,6 +148,8 @@ bun run dev
 | POST | /v1/permission-requests | create permission request |
 | GET | /v1/permission-requests | list open permission requests |
 | POST | /v1/permission-requests/:id/resolve | approve or deny |
+| GET | /v1/members | list org members |
+| GET | /v1/actors | list actor summaries |
 | POST | /v1/clients | register client |
 
 Server endpoint: `GET /health`

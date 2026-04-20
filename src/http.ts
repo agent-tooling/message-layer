@@ -77,6 +77,20 @@ export function createApp(service: MessageLayerService): Hono {
     }
   });
 
+  app.get("/v1/channels", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const channels = await service.listChannels(principal);
+      return c.json({ channels });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
   app.post("/v1/threads", async (c) => {
     const principalOrResponse = requirePrincipal(c);
     if (principalOrResponse instanceof Response) {
@@ -96,6 +110,20 @@ export function createApp(service: MessageLayerService): Hono {
         body.visibility ?? "private",
       );
       return c.json({ threadId });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
+  app.get("/v1/channels/:channelId/threads", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const threads = await service.listThreads(principal, c.req.param("channelId"));
+      return c.json({ threads });
     } catch (error) {
       return handleError(c, error);
     }
@@ -245,6 +273,21 @@ export function createApp(service: MessageLayerService): Hono {
     }
   });
 
+  app.get("/v1/permission-requests", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const actorId = c.req.query("actorId");
+      const requests = await service.listOpenPermissionRequests(principal.orgId, actorId);
+      return c.json({ requests });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
   app.post("/v1/permission-requests/:requestId/resolve", async (c) => {
     const principalOrResponse = requirePrincipal(c);
     if (principalOrResponse instanceof Response) {
@@ -309,6 +352,53 @@ export function createApp(service: MessageLayerService): Hono {
       const body = await c.req.json<{ endpoint: string; metadata?: Record<string, unknown> }>();
       const clientId = await service.registerClient(principal, body.endpoint, body.metadata ?? {});
       return c.json({ clientId });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
+  app.get("/v1/grants/check", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const actorId = c.req.query("actorId");
+      const capability = c.req.query("capability");
+      if (!actorId || !capability) {
+        return c.json({ error: "missing actorId or capability" }, 400);
+      }
+      const hasGrant = await service.checkGrant(principal.orgId, actorId, capability);
+      return c.json({ hasGrant });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
+  app.get("/v1/members", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const members = await service.listMembers(principal);
+      return c.json({ members });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
+  app.get("/v1/actors", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const actors = await service.listActorSummaries(principal);
+      return c.json({ actors });
     } catch (error) {
       return handleError(c, error);
     }

@@ -43,6 +43,7 @@ const EVENT_TYPES: ReadonlySet<EventType> = new Set([
   "artifact.registered",
   "knowledge.promoted",
   "audit.logged",
+  "client.registered",
 ]);
 
 export class PermissionError extends Error {
@@ -241,6 +242,103 @@ export class MessageLayer {
       payload: { orgId: principal.orgId, threadId, channelId, parentMessageId },
     });
     return threadId;
+  }
+
+  async listChannels(
+    principal: Principal,
+  ): Promise<Array<{ id: string; name: string; visibility: string; createdByActorId: string; createdAt: string }>> {
+    await this.assertOrgActor(principal);
+    const rows = await this.query<{
+      id: string;
+      name: string;
+      visibility: string;
+      created_by_actor_id: string;
+      created_at: string;
+    }>(
+      `SELECT c.id,c.name,c.visibility,c.created_by_actor_id,c.created_at
+       FROM channels c
+       INNER JOIN memberships m ON m.channel_id=c.id
+       WHERE c.org_id=? AND m.actor_id=?
+       ORDER BY c.created_at ASC`,
+      [principal.orgId, principal.actorId],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      visibility: row.visibility,
+      createdByActorId: row.created_by_actor_id,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async listThreads(
+    principal: Principal,
+    channelId: string,
+  ): Promise<Array<{ id: string; parentMessageId: string; visibility: string; createdByActorId: string; createdAt: string }>> {
+    await this.assertOrgActor(principal);
+    const rows = await this.query<{
+      id: string;
+      parent_message_id: string;
+      visibility: string;
+      created_by_actor_id: string;
+      created_at: string;
+    }>(
+      `SELECT t.id,t.parent_message_id,t.visibility,t.created_by_actor_id,t.created_at
+       FROM threads t
+       WHERE t.org_id=? AND t.channel_id=?
+       ORDER BY t.created_at ASC`,
+      [principal.orgId, channelId],
+    );
+    return rows.map((row) => ({
+      id: row.id,
+      parentMessageId: row.parent_message_id,
+      visibility: row.visibility,
+      createdByActorId: row.created_by_actor_id,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async listMembers(
+    principal: Principal,
+  ): Promise<Array<{ actorId: string; actorType: string; displayName: string; role: string; createdAt: string }>> {
+    await this.assertOrgActor(principal);
+    const rows = await this.query<{
+      actor_id: string;
+      actor_type: string;
+      display_name: string;
+      role: string;
+      created_at: string;
+    }>(
+      `SELECT m.actor_id,a.type AS actor_type,a.display_name,m.role,m.created_at
+       FROM memberships m
+       INNER JOIN actors a ON a.id=m.actor_id
+       WHERE m.org_id=? AND m.channel_id IS NULL
+       ORDER BY m.created_at ASC`,
+      [principal.orgId],
+    );
+    return rows.map((row) => ({
+      actorId: row.actor_id,
+      actorType: row.actor_type,
+      displayName: row.display_name,
+      role: row.role,
+      createdAt: row.created_at,
+    }));
+  }
+
+  async listActorSummaries(
+    principal: Principal,
+  ): Promise<Array<{ actorId: string; actorType: string; displayName: string; createdAt: string }>> {
+    await this.assertOrgActor(principal);
+    const rows = await this.query<{ id: string; type: string; display_name: string; created_at: string }>(
+      "SELECT id,type,display_name,created_at FROM actors WHERE org_id=? ORDER BY created_at ASC",
+      [principal.orgId],
+    );
+    return rows.map((row) => ({
+      actorId: row.id,
+      actorType: row.type,
+      displayName: row.display_name,
+      createdAt: row.created_at,
+    }));
   }
 
   async appendMessage(
@@ -476,6 +574,11 @@ export class MessageLayer {
       stableJsonRecord(metadata),
       this.now(),
     ]);
+    await this.appendEvent({
+      orgId: principal.orgId,
+      eventType: "client.registered",
+      payload: { orgId: principal.orgId, clientId, actorId: principal.actorId, endpoint },
+    });
     return clientId;
   }
 

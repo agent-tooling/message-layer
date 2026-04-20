@@ -13,7 +13,9 @@
     "client:terminal": "tsx clients/terminal/client.ts",
     "client:terminal:demo": "tsx clients/terminal/client.ts --smoke",
     "client:nextjs": "bun run --cwd clients/nextjs dev",
-    "client:nextjs:build": "bun run --cwd clients/nextjs build"
+    "client:nextjs:build": "bun run --cwd clients/nextjs build",
+    "client:nextjs-team": "bun run --cwd clients/nextjs-team-client dev",
+    "client:nextjs-team:build": "bun run --cwd clients/nextjs-team-client build"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.11",

@@ -101,6 +101,14 @@ for (const adapter of adapters) {
         expect(channelRes.status).toBe(200);
         const channelId = ((await channelRes.json()) as { channelId: string }).channelId;
 
+        const channelsListRes = await app.request("http://localhost/v1/channels", {
+          method: "GET",
+          headers: principalHeader(admin),
+        });
+        expect(channelsListRes.status).toBe(200);
+        const channelsList = (await channelsListRes.json()) as { channels: Array<{ id: string }> };
+        expect(channelsList.channels.map((channel) => channel.id)).toContain(channelId);
+
         for (const grant of [
           { actorId: botId, resourceType: "channel", resourceId: channelId, capability: "message:append" },
           { actorId: botId, resourceType: "channel", resourceId: channelId, capability: "thread:create" },
@@ -149,6 +157,14 @@ for (const adapter of adapters) {
         });
         expect(threadRes.status).toBe(200);
         const threadId = ((await threadRes.json()) as { threadId: string }).threadId;
+
+        const threadListRes = await app.request(`http://localhost/v1/channels/${channelId}/threads`, {
+          method: "GET",
+          headers: principalHeader(admin),
+        });
+        expect(threadListRes.status).toBe(200);
+        const threadList = (await threadListRes.json()) as { threads: Array<{ id: string }> };
+        expect(threadList.threads.map((thread) => thread.id)).toContain(threadId);
 
         const threadGrantRes = await app.request("http://localhost/v1/grants", {
           method: "POST",
@@ -235,6 +251,14 @@ for (const adapter of adapters) {
         expect(reqRes.status).toBe(200);
         const requestId = ((await reqRes.json()) as { requestId: string }).requestId;
 
+        const requestListRes = await app.request("http://localhost/v1/permission-requests", {
+          method: "GET",
+          headers: principalHeader(admin),
+        });
+        expect(requestListRes.status).toBe(200);
+        const requestList = (await requestListRes.json()) as { requests: Array<{ requestId: string }> };
+        expect(requestList.requests.map((request) => request.requestId)).toContain(requestId);
+
         const resolveRes = await app.request(
           `http://localhost/v1/permission-requests/${requestId}/resolve`,
           {
@@ -268,12 +292,40 @@ for (const adapter of adapters) {
           }),
         });
         const revokeGrantId = ((await revokeGrantRes.json()) as { grantId: string }).grantId;
+
+        const grantCheckRes = await app.request(
+          `http://localhost/v1/grants/check?actorId=${botId}&capability=message:append`,
+          {
+            method: "GET",
+            headers: principalHeader(admin),
+          },
+        );
+        expect(grantCheckRes.status).toBe(200);
+        const grantCheck = (await grantCheckRes.json()) as { hasGrant: boolean };
+        expect(grantCheck.hasGrant).toBe(true);
+
         const revokeRes = await app.request(`http://localhost/v1/grants/${revokeGrantId}/revoke`, {
           method: "POST",
           headers: principalHeader(admin),
           body: JSON.stringify({}),
         });
         expect(revokeRes.status).toBe(200);
+
+        const actorListRes = await app.request("http://localhost/v1/actors", {
+          method: "GET",
+          headers: principalHeader(admin),
+        });
+        expect(actorListRes.status).toBe(200);
+        const actors = (await actorListRes.json()) as { actors: Array<{ actorId: string }> };
+        expect(actors.actors.map((actor) => actor.actorId)).toEqual(expect.arrayContaining([adminId, botId, userId]));
+
+        const membersRes = await app.request("http://localhost/v1/members", {
+          method: "GET",
+          headers: principalHeader(admin),
+        });
+        expect(membersRes.status).toBe(200);
+        const members = (await membersRes.json()) as { members: Array<{ actorId: string }> };
+        expect(members.members.map((member) => member.actorId)).toEqual(expect.arrayContaining([adminId, botId, userId]));
       } finally {
         await db.close?.();
       }
