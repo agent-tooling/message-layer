@@ -4,9 +4,6 @@
   "private": true,
   "type": "module",
   "description": "Headless messaging layer v1 core",
-  "engines": {
-    "node": ">=22"
-  },
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "node --enable-source-maps dist/server.js",
@@ -29,5 +26,9 @@
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
     "vitest": "^3.2.4"
+  },
+  "packageManager": "bun@1.2.16",
+  "engines": {
+    "node": ">=22"
   }
 }

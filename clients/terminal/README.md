@@ -7,11 +7,11 @@ you can explore server behavior quickly while building/testing the core.
 
 Start the server first:
 
-`pnpm dev`
+`bun run dev`
 
 Then launch the terminal UI:
 
-`pnpm client:terminal`
+`bun run client:terminal`
 
 Optional env vars:
 

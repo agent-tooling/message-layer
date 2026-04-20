@@ -4,8 +4,8 @@ import { spawn } from "node:child_process";
 function runTerminalClientSmoke(): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(
-      "pnpm",
-      ["exec", "tsx", "clients/terminal/client.ts", "--smoke"],
+      "bun",
+      ["x", "tsx", "clients/terminal/client.ts", "--smoke"],
       {
         cwd: "/workspace",
         env: process.env,

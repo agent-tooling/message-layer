@@ -28,19 +28,19 @@ messaging core:
 
 Install dependencies:
 
-`pnpm install`
+`bun install`
 
 Run tests:
 
-`pnpm test`
+`bun run test`
 
 Start the server:
 
-`pnpm dev`
+`bun run dev`
 
 Run the terminal client (in another terminal):
 
-`pnpm client:terminal`
+`bun run client:terminal`
 
 The terminal client is in `clients/terminal/` and is intended for quick manual
 exploration of the core APIs.
