@@ -1,0 +1,90 @@
+import { serve } from "@hono/node-server";
+import type { Server as HttpServer } from "node:http";
+import { loadServerConfig, type ServerConfig } from "./config.js";
+import { connect, type SqlDatabase } from "./db.js";
+import { InProcessEventBus, type EventBus } from "./event-bus.js";
+import { createApp } from "./http.js";
+import { applyPluginsToApp, resolvePlugins, type PluginLogger } from "./plugins.js";
+import { MessageLayer, type MessageLayerService } from "./service.js";
+import { attachWebSocketServer, type WebSocketServerHandle } from "./ws.js";
+
+export interface StartServerOptions {
+  config?: ServerConfig;
+  db?: SqlDatabase;
+  logger?: PluginLogger;
+  env?: NodeJS.ProcessEnv;
+  /** Bind to a random port when > 0 is not required. */
+  port?: number;
+}
+
+export interface RunningServer {
+  config: ServerConfig;
+  service: MessageLayerService;
+  bus: EventBus;
+  db: SqlDatabase;
+  port: number;
+  address: string;
+  httpServer: HttpServer;
+  ws: WebSocketServerHandle | null;
+  disposePlugins: () => Promise<void>;
+  close: () => Promise<void>;
+}
+
+/**
+ * Boots a full message-layer server in-process: DB, service, HTTP app,
+ * plugins, optional WebSocket transport. Returns a handle that shuts the
+ * whole thing down cleanly.
+ *
+ * Designed for tests too: pass `port: 0` to get a random port, or pass a
+ * pre-built `db` to share state across multiple servers.
+ */
+export async function startServer(options: StartServerOptions = {}): Promise<RunningServer> {
+  const env = options.env ?? process.env;
+  const config: ServerConfig = options.config ?? loadServerConfig(env);
+  const logger: PluginLogger = options.logger ?? ((msg) => console.log(msg));
+
+  const db = options.db ?? (await connect(config.storage.path, config.storage.adapter));
+  const bus = new InProcessEventBus((m) => logger(`[event-bus] ${m}`));
+  const service = new MessageLayer(db, { bus });
+
+  const app = createApp(service);
+  const plugins = resolvePlugins(config.plugins);
+  const disposePlugins = await applyPluginsToApp(
+    { app, service, bus, logger, env, config },
+    plugins,
+  );
+
+  const port = options.port ?? config.port;
+
+  const httpServer = await new Promise<HttpServer>((resolve) => {
+    const s = serve({ fetch: app.fetch, port }, () => resolve(s as unknown as HttpServer));
+  });
+
+  let ws: WebSocketServerHandle | null = null;
+  if (config.websocket) {
+    ws = attachWebSocketServer(httpServer, service, bus);
+  }
+
+  const address = httpServer.address();
+  const resolvedPort = typeof address === "object" && address ? address.port : port;
+
+  return {
+    config,
+    service,
+    bus,
+    db,
+    port: resolvedPort,
+    address: `http://127.0.0.1:${resolvedPort}`,
+    httpServer,
+    ws,
+    disposePlugins,
+    close: async () => {
+      await ws?.close();
+      await disposePlugins();
+      await new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+      });
+      if (!options.db) await db.close?.();
+    },
+  };
+}

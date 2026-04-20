@@ -1,7 +1,14 @@
 import { PGlite } from "@electric-sql/pglite";
-import { DatabaseSync } from "node:sqlite";
 
-const BASE_SCHEMA_SQL = `
+// The storage layer is intentionally small. The only adapter shipped in v1 is
+// PGlite, which is Postgres-wire-compatible and satisfies the local-first
+// mandate in AGENTS.md (no Docker, full functionality).
+//
+// A hosted Postgres implementation can be layered on top of the `SqlDatabase`
+// interface without changing any service code. The same schema is used for
+// both modes, so migrations stay single-source.
+
+const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS organizations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -24,14 +31,15 @@ CREATE TABLE IF NOT EXISTS memberships (
   channel_id TEXT,
   role TEXT NOT NULL,
   metadata_json TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  UNIQUE (org_id, actor_id, channel_id)
 );
 
 CREATE TABLE IF NOT EXISTS channels (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
   name TEXT NOT NULL,
-  visibility TEXT NOT NULL DEFAULT 'private',
+  visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','public')),
   created_by_actor_id TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -41,7 +49,7 @@ CREATE TABLE IF NOT EXISTS threads (
   org_id TEXT NOT NULL,
   channel_id TEXT NOT NULL,
   parent_message_id TEXT NOT NULL,
-  visibility TEXT NOT NULL DEFAULT 'private',
+  visibility TEXT NOT NULL DEFAULT 'private' CHECK (visibility IN ('private','public')),
   created_by_actor_id TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
@@ -61,6 +69,9 @@ CREATE TABLE IF NOT EXISTS messages (
   idempotency_key TEXT NOT NULL,
   created_at TEXT NOT NULL,
   redacted INTEGER NOT NULL DEFAULT 0,
+  redacted_at TEXT,
+  redacted_by_actor_id TEXT,
+  redaction_reason TEXT,
   UNIQUE (org_id, stream_id, actor_id, idempotency_key),
   UNIQUE (stream_id, stream_seq)
 );
@@ -134,7 +145,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE TABLE IF NOT EXISTS audit_events (
-  __AUDIT_SEQ_COLUMN__,
+  audit_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   id TEXT NOT NULL UNIQUE,
   org_id TEXT NOT NULL,
   event_type TEXT NOT NULL,
@@ -143,18 +154,17 @@ CREATE TABLE IF NOT EXISTS audit_events (
   event_hash TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_messages_stream ON messages(stream_id, stream_seq);
+CREATE INDEX IF NOT EXISTS idx_events_stream ON events(stream_id, stream_seq);
+CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_events(org_id, audit_seq);
+CREATE INDEX IF NOT EXISTS idx_memberships_actor ON memberships(org_id, actor_id);
+CREATE INDEX IF NOT EXISTS idx_memberships_channel ON memberships(org_id, channel_id);
 `;
 
-const SCHEMA_SQL_PGLITE = BASE_SCHEMA_SQL.replace(
-  "__AUDIT_SEQ_COLUMN__",
-  "audit_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY",
-);
-const SCHEMA_SQL_SQLITE = BASE_SCHEMA_SQL.replace(
-  "__AUDIT_SEQ_COLUMN__",
-  "audit_seq INTEGER PRIMARY KEY AUTOINCREMENT",
-);
-
 export type SqlValue = string | number | null;
+export type StorageAdapter = "pglite";
 
 export interface QueryResultRow {
   [key: string]: unknown;
@@ -168,7 +178,7 @@ export interface DbClient {
 }
 
 export interface SqlDatabase extends DbClient {
-  adapter: StorageAdapter;
+  readonly adapter: StorageAdapter;
   tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;
 }
@@ -182,7 +192,7 @@ function rewritePositionalParams(sql: string): string {
 }
 
 class PgliteClient implements SqlDatabase {
-  readonly adapter = "pglite" as const;
+  readonly adapter: StorageAdapter = "pglite";
 
   constructor(private readonly db: PGlite) {}
 
@@ -220,78 +230,15 @@ class PgliteClient implements SqlDatabase {
   }
 }
 
-function normalizeSqliteParams(sql: string): string {
-  return sql.replaceAll(/\$\d+/g, "?");
-}
-
-class SqliteClient implements SqlDatabase {
-  readonly adapter = "sqlite" as const;
-
-  constructor(private readonly db: DatabaseSync) {}
-
-  async query<T extends QueryResultRow = QueryResultRow>(
-    sql: string,
-    params: SqlValue[] = [],
-  ): Promise<{ rows: T[] }> {
-    const stmt = this.db.prepare(normalizeSqliteParams(sql));
-    const upperSql = sql.trim().toUpperCase();
-    if (upperSql.startsWith("SELECT")) {
-      const rows = stmt.all(...params) as T[];
-      return { rows };
-    }
-    stmt.run(...params);
-    return { rows: [] };
-  }
-
-  async tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T> {
-    this.db.exec("BEGIN");
-    try {
-      const output = await fn({
-        query: async <R extends QueryResultRow = QueryResultRow>(
-          sql: string,
-          params: SqlValue[] = [],
-        ) => {
-          const stmt = this.db.prepare(normalizeSqliteParams(sql));
-          const upperSql = sql.trim().toUpperCase();
-          if (upperSql.startsWith("SELECT")) {
-            const rows = stmt.all(...params) as R[];
-            return { rows };
-          }
-          stmt.run(...params);
-          return { rows: [] };
-        },
-      });
-      this.db.exec("COMMIT");
-      return output;
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-  }
-
-  close(): void {
-    this.db.close();
-  }
-}
-
 export async function createPgliteDatabase(path = "memory://"): Promise<SqlDatabase> {
   const db = new PGlite(path);
-  await db.exec(SCHEMA_SQL_PGLITE);
+  await db.exec(SCHEMA_SQL);
   return new PgliteClient(db);
 }
 
-export async function createSqliteDatabase(path = ":memory:"): Promise<SqlDatabase> {
-  const db = new DatabaseSync(path);
-  db.exec(SCHEMA_SQL_SQLITE);
-  return new SqliteClient(db);
-}
-
-export type StorageAdapter = "pglite" | "sqlite";
-
 export async function connect(path = "memory://", adapter: StorageAdapter = "pglite"): Promise<SqlDatabase> {
-  if (adapter === "sqlite") {
-    const sqlitePath = path === "memory://" ? ":memory:" : path;
-    return createSqliteDatabase(sqlitePath);
+  if (adapter !== "pglite") {
+    throw new Error(`unsupported storage adapter: ${adapter as string}`);
   }
   return createPgliteDatabase(path);
 }

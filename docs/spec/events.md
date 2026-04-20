@@ -48,8 +48,17 @@ carry `streamSeq: null`.
 
 ## Subscription semantics
 
-`GET /v1/streams/:streamId/subscribe?fromSeq=N` returns the events on a
-single stream with `streamSeq > N`, in `streamSeq` ascending order.
+Two transports expose the same event stream:
+
+1. **HTTP replay** — `GET /v1/streams/:streamId/subscribe?fromSeq=N` returns
+   events with `streamSeq > N` in `streamSeq` ascending order.
+2. **WebSocket** — `GET /v1/ws` upgrades to a push channel that first
+   replays events with `streamSeq > fromSeq` from the DB and then forwards
+   live events from the in-process event bus as they are emitted.
+
+Both transports check privacy: subscribing to a private stream that the
+principal is not a member of yields a `403` (HTTP) or a `PERMISSION_DENIED`
+error frame (WebSocket).
 
 - Ordering: events returned within a single stream are strictly ordered by
   `streamSeq`. Clients that process events in returned order will observe
@@ -67,5 +76,7 @@ single stream with `streamSeq > N`, in `streamSeq` ascending order.
 ## Audit log
 
 All event appends are mirrored into a per-org append-only audit log with
-hash-chained entries. The audit log is not part of the public HTTP API in
-`v1`; it is an internal integrity property.
+hash-chained entries. Authenticated principals holding the `audit:read`
+scope can export the raw log via `GET /v1/audit/rows` and recompute the
+chain via `GET /v1/audit/verify`; both endpoints are read-only and do not
+permit mutation.

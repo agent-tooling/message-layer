@@ -1,135 +1,92 @@
 # message-layer
 
-A headless messaging layer for humans, agents, and apps — with Pi coding agent as the first-class runtime.
+A headless messaging and coordination layer for humans, agents, and apps.
 
-## v1 TypeScript core
+- **Messages are the center.** Actions, permissions, knowledge, and audit all
+  flow through typed, append-only messages.
+- **Minimal core, everything else is a plugin.** Core owns orgs, actors,
+  channels, threads, messages, permissions, privacy, audit.
+- **One system, multiple modes.** Same service boots against PGlite (local)
+  today; a hosted Postgres mode fits the same `SqlDatabase` interface.
+- **Transport is swappable.** HTTP for commands, WebSocket for realtime.
+- **Permission-first.** Denials can be converted into permission requests;
+  approvals automatically issue grants.
+- **Privacy is a hard boundary.** Private channels are invisible to
+  non-members and non-readable over HTTP or WebSocket.
+- **Audit everything.** Every domain event goes into a per-org, hash-chained
+  append-only log, verifiable via `GET /v1/audit/verify`.
 
-This repository includes a local-first TypeScript implementation of the v1 messaging core:
-
-- orgs, actors, memberships, channels, threads
-- append-only structured messages with ordered message parts
-- per-stream monotonic ordering via `streamSeq`
-- idempotent appends keyed by `(orgId, streamId, actorId, idempotencyKey)`
-- grant-based authorization + permission request flow
-- cursor updates and client registration
-- event replay from stream cursor
-- append-only audit log with hash chaining
-
-## Agent kernel
-
-`src/agent-kernel/` integrates Pi (`@mariozechner/pi-coding-agent`) in-process as an agent runtime:
-
-- `AgentKernel` owns a Pi `AgentSession` and persists every turn as message-layer parts (`text`, `tool_call`, `tool_result`, `approval_request`, `approval_response`).
-- Tool execution goes through a **permission gate**: if the agent actor lacks a `tool:execute:<toolName>` grant, a permission request is created and the tool call is suspended until a human approves or denies via the API or either client.
-- Idempotent appends via Pi event timestamps keep the stream consistent.
-
-## Stack
-
-- Node.js + TypeScript
-- Hono HTTP server
-- PGlite local PostgreSQL adapter
-- Zod validation
-- Vitest end-to-end tests (no mocks)
-- Pi coding agent SDK (`@mariozechner/pi-coding-agent`, `@mariozechner/pi-ai`)
-
-## Run locally
-
-Install dependencies:
+## Quick start
 
 ```
 bun install
+bun run dev          # HTTP + WS on http://localhost:3000
+bun run test         # 73 tests across unit + e2e, no mocks
 ```
 
-Run tests:
+For local development setup, see [CONTRIBUTING.md](./CONTRIBUTING.md).
+Full API reference lives in [`docs/spec/`](./docs/spec/).
+
+## HTTP (condensed)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/health` | Liveness probe |
+| `POST` | `/v1/orgs` | Create org (unauthenticated) |
+| `POST` | `/v1/actors` | Create actor (unauthenticated) |
+| `GET` | `/v1/actors` | List actors in the principal's org |
+| `GET` | `/v1/members` | List org memberships |
+| `POST` | `/v1/channels` | Create channel |
+| `GET` | `/v1/channels` | List channels visible to the principal |
+| `POST` | `/v1/channels/:id/members` | Add channel member |
+| `DELETE` | `/v1/channels/:id/members/:actorId` | Remove channel member |
+| `GET` | `/v1/channels/:id/members` | List channel members |
+| `POST` | `/v1/threads` | Create thread |
+| `GET` | `/v1/channels/:id/threads` | List threads |
+| `POST` | `/v1/messages` | Append message (idempotent + optional `autoRequestOnDeny`) |
+| `POST` | `/v1/messages/:id/redact` | Redact message content (slot preserved) |
+| `GET` | `/v1/streams/:id/messages` | List messages |
+| `GET` | `/v1/streams/:id/subscribe` | HTTP replay of events |
+| `POST` | `/v1/cursors` | Update read cursor |
+| `GET` | `/v1/streams/:id/cursor` | Read cursor |
+| `POST` | `/v1/grants` | Create grant |
+| `POST` | `/v1/grants/:id/revoke` | Revoke grant |
+| `GET` | `/v1/grants/check` | Check capability |
+| `POST` | `/v1/permission-requests` | Open a permission request |
+| `GET` | `/v1/permission-requests` | List open requests |
+| `POST` | `/v1/permission-requests/:id/resolve` | Approve or deny |
+| `POST` | `/v1/clients` | Register a client endpoint |
+| `GET` | `/v1/audit/rows` | Export audit log (requires `audit:read` scope) |
+| `GET` | `/v1/audit/verify` | Verify audit hash chain |
+
+Every authenticated request carries an `x-principal` JSON header. See
+[`docs/spec/authentication.md`](./docs/spec/authentication.md).
+
+## WebSocket
+
+`ws://<host>/v1/ws` accepts the same principal (header or `?principal=…`)
+and speaks a tiny JSON protocol:
 
 ```
-bun run test
+→ { "type": "subscribe", "streamId": "…", "streamType": "channel|thread", "fromSeq": 0 }
+→ { "type": "unsubscribe", "streamId": "…" }
+→ { "type": "ping" }
+
+← { "type": "welcome", "actorId", "orgId" }
+← { "type": "subscribed", "streamId", "lastSeq" }
+← { "type": "event", "event": { "type", "payload", "streamSeq", "createdAt" } }
+← { "type": "pong" }
+← { "type": "error", "error": "…", "code"? }
 ```
 
-Start the server:
+Subscriptions first replay events with `streamSeq > fromSeq` from the DB and
+then push live events from the in-process event bus.
 
-```
-bun run dev
-```
+## Agent kernel & clients
 
-## Terminal client (Pi agent REPL)
-
-The terminal client wraps Pi in an interactive agent REPL powered by message-layer:
-
-```
-bun run client:terminal
-```
-
-### Quick start
-
-```
-> init                        # create org, actors, channel and start Pi
-> What files are in the cwd?  # send prompt — output streams live
-> model list                  # see available models
-> model set anthropic/claude-opus-4-5
-> pending                     # list pending tool approval requests
-> approve <requestId>         # approve a tool call
-> deny <requestId>            # deny a tool call
-> steer stop and do X instead
-> messages 20                 # tail the last 20 stream entries
-> --raw                       # switch to low-level API REPL
-```
-
-### API keys
-
-Pi reads provider API keys from `~/.pi/agent/auth.json` or environment variables (e.g. `ANTHROPIC_API_KEY`). See [pi-mono docs/providers.md](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/providers.md) for setup.
-
-## Next.js web client (team + agents)
-
-`clients/nextjs` is the canonical proof-of-concept web client. It showcases how a team and external agents collaborate on message-layer:
-
-- Better Auth login, invite-link onboarding, and session persistence
-- channels, threads, messages with rich part rendering (text, tool_call, tool_result, approval_request/response, artifact)
-- attachment upload/download via a pluggable `AttachmentStore`
-- Agent Auth discovery + protected agent session endpoints
-- in-app approval inbox for permission requests so humans can allow/deny agent tool calls
-
-Run the server first, then:
-
-```
-bun run client:nextjs       # http://localhost:3001
-```
-
-Setup:
-
-```
-cd clients/nextjs
-cp .env.local.example .env.local
-bun install
-bunx @better-auth/cli migrate --config ./lib/auth.ts --yes
-bun run dev
-```
-
-See `clients/nextjs/README.md` and `clients/nextjs/smoke-tests/` for the full walkthrough.
-
-## HTTP API
-
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | /health | liveness check |
-| POST | /v1/orgs | create org |
-| POST | /v1/actors | create actor |
-| POST | /v1/channels | create channel |
-| GET | /v1/channels | list channels for principal |
-| POST | /v1/threads | create thread |
-| GET | /v1/channels/:channelId/threads | list threads in a channel |
-| POST | /v1/messages | append message |
-| GET | /v1/streams/:id/messages | list messages |
-| GET | /v1/streams/:id/subscribe | replay events |
-| POST | /v1/cursors | update cursor |
-| POST | /v1/grants | create grant |
-| POST | /v1/grants/:id/revoke | revoke grant |
-| GET | /v1/grants/check | check if actor has capability |
-| POST | /v1/permission-requests | create permission request |
-| GET | /v1/permission-requests | list open permission requests |
-| POST | /v1/permission-requests/:id/resolve | approve or deny |
-| GET | /v1/members | list org members |
-| GET | /v1/actors | list actor summaries |
-| POST | /v1/clients | register client |
-
-Server endpoint: `GET /health`
+- `src/agent-kernel/` embeds the Pi coding agent in-process and routes every
+  tool call through a permission gate: missing `tool:execute:<toolName>` →
+  permission request → resolved by a human over HTTP → agent resumes.
+- `clients/terminal/` is an interactive REPL on top of the kernel.
+- `clients/nextjs/` is a full web client with Better Auth, invites,
+  attachments, and an approval inbox.

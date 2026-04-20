@@ -12,9 +12,23 @@ All error responses are JSON with an `error` string field:
 |--------|-------------------------------------------------------------------------------------------|
 | `200`  | Success.                                                                                  |
 | `400`  | Validation error: malformed body, missing required field, invalid enum, etc.              |
-| `401`  | Missing or invalid `x-principal` header.                                                  |
-| `403`  | The principal is authenticated but lacks the required scope or grant.                     |
+| `401`  | Missing or invalid `x-principal` header (or missing required API key when the host has configured key-based gating). |
+| `403`  | The principal is authenticated but lacks the required scope or grant, or attempted to access a private stream it is not a member of. |
+| `404`  | Referenced resource (channel, thread, message, grant, permission request) does not exist in the principal's org. |
 | `500`  | Unexpected server error.                                                                  |
+
+Error payloads also carry a machine-friendly `code` field:
+
+| `code`              | Meaning |
+|---------------------|---------|
+| `VALIDATION`        | Body or query did not pass validation. |
+| `PERMISSION_DENIED` | Scope/grant/membership check failed. |
+| `NOT_FOUND`         | Referenced id does not exist. |
+| `ERROR`             | Generic bucket for unclassified errors. |
+
+`PermissionError` responses also include `capability`, `resourceType`, and
+`resourceId` fields when available, so callers can mint a matching
+permission request without parsing the human-readable message.
 
 ## Common error conditions
 

@@ -58,6 +58,36 @@ channel).
 
 **Response** `200` — `{ "members": [{ "actorId", "actorType", "displayName", "role", "createdAt" }] }`
 
+## Channel membership
+
+### `POST /v1/channels/:channelId/members`
+
+Add an actor as a member of a channel. Required to read or post in a
+private channel. Must be invoked by the channel creator, by a principal with
+the `channel:admin` scope, or by a principal holding a `channel:admin` grant
+on the channel.
+
+**Request**
+| Field    | Type   | Required | Description |
+|----------|--------|----------|-------------|
+| actorId  | string | yes      | Actor to add. Must belong to the principal's org. |
+| role     | string | no       | Defaults to `"member"`. |
+
+**Response** `200` — `{ "ok": true }`
+
+### `DELETE /v1/channels/:channelId/members/:actorId`
+
+Remove a member. An actor may self-remove without admin rights.
+
+**Response** `200` — `{ "ok": true }`
+
+### `GET /v1/channels/:channelId/members`
+
+List members of a channel. Requires read access to the channel (public, or
+existing membership).
+
+**Response** `200` — `{ "members": [{ "actorId", "role", "createdAt" }] }`
+
 ## Channels
 
 ### `POST /v1/channels`
@@ -108,12 +138,13 @@ Append a message to a stream. Requires `message:append` on the target stream.
 Idempotent on `(orgId, streamId, actorId, idempotencyKey)`.
 
 **Request**
-| Field           | Type                       | Required | Description |
-|-----------------|----------------------------|----------|-------------|
-| streamId        | string                     | yes      | Channel or thread id. |
-| streamType      | `"channel"` \| `"thread"`  | yes      | Discriminates the stream kind. |
-| parts           | `MessagePart[]`            | yes      | Ordered parts; see [concepts.md](./concepts.md). |
-| idempotencyKey  | string                     | yes      | Client-chosen dedupe key. |
+| Field              | Type                       | Required | Description |
+|--------------------|----------------------------|----------|-------------|
+| streamId           | string                     | yes      | Channel or thread id. |
+| streamType         | `"channel"` \| `"thread"`  | yes      | Discriminates the stream kind. |
+| parts              | `MessagePart[]`            | yes      | Ordered parts; see [concepts.md](./concepts.md). |
+| idempotencyKey     | string                     | yes      | Client-chosen dedupe key. |
+| autoRequestOnDeny  | boolean                    | no       | If `true`, a missing grant opens a permission request instead of returning `403`. |
 
 `MessagePart`:
 ```json
@@ -121,13 +152,33 @@ Idempotent on `(orgId, streamId, actorId, idempotencyKey)`.
   "payload": { ... } }
 ```
 
-**Response** `200`
+**Response** `200` on success
 ```json
 { "messageId": "string", "streamSeq": 42, "idempotent": false }
 ```
 
+**Response** `200` when denied with `autoRequestOnDeny: true`
+```json
+{ "denied": true, "requestId": "…", "capability": "message:append",
+  "resourceType": "channel", "resourceId": "…" }
+```
+
 `idempotent` is `true` when the request replayed a prior append; in that
 case `messageId` and `streamSeq` refer to the original message.
+
+### `POST /v1/messages/:messageId/redact`
+
+Redact a message. The message's slot in the stream is preserved (its
+`streamSeq` is kept), but all parts are removed and the record is marked
+`redacted`. Authorized if the caller is the original author, holds the
+`message:redact` scope, or has a `message:redact` grant on the stream.
+
+**Request**
+| Field  | Type   | Required | Description |
+|--------|--------|----------|-------------|
+| reason | string | no       | Free-form reason attached to the `message.redacted` event. |
+
+**Response** `200` — `{ "ok": true }`
 
 ### `GET /v1/streams/:streamId/messages`
 
@@ -181,6 +232,12 @@ Update the principal's read cursor on a stream.
 
 **Response** `200` — `{ "ok": true }`
 
+### `GET /v1/streams/:streamId/cursor`
+
+Read the principal's cursor on a stream.
+
+**Response** `200` — `{ "cursor": { "lastSeenSeq", "lastAckSeq", "updatedAt" } | null }`
+
 ## Grants and permission requests
 
 See [authorization.md](./authorization.md) for semantics.
@@ -206,3 +263,29 @@ runtimes to advertise where they can receive deliveries or callbacks.
 | metadata  | object | no       | Free-form JSON metadata. |
 
 **Response** `200` — `{ "clientId": "string" }`
+
+## Audit
+
+### `GET /v1/audit/rows`
+
+Export the per-org audit log. Requires the `audit:read` scope on the
+principal. Returns every audit entry, including prev/current hash for
+verification.
+
+**Response** `200` — `{ "rows": [{ "id", "eventType", "payload", "prevHash", "eventHash", "createdAt" }] }`
+
+### `GET /v1/audit/verify`
+
+Recompute the hash chain and report the first inconsistent index, if any.
+Requires `audit:read`.
+
+**Response** `200` — `{ "valid": boolean, "firstBadIndex": number | null, "total": number }`
+
+## WebSocket
+
+### `GET /v1/ws` (upgrade)
+
+A WebSocket endpoint that speaks a small JSON protocol for realtime stream
+subscriptions. The `x-principal` header (or `?principal=<json>` query
+parameter) is required on upgrade. See the root `README.md` for the message
+shapes.

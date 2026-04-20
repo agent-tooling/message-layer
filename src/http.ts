@@ -1,406 +1,467 @@
-import { Hono } from "hono";
-import type { Context } from "hono";
-import { MessageLayerService } from "./service.js";
-import { PermissionError } from "./service.js";
-import type { Principal } from "./types.js";
+import { Hono, type Context } from "hono";
+import { z } from "zod";
+import type { MessageLayerService } from "./service.js";
+import {
+  NotFoundError,
+  PermissionError,
+  ValidationError,
+  actorTypeSchema,
+  messagePartSchema,
+  principalSchema,
+  streamTypeSchema,
+  visibilitySchema,
+  type Principal,
+} from "./types.js";
+
+const createOrgBody = z.object({ name: z.string().min(1) });
+const createActorBody = z.object({
+  orgId: z.string().min(1),
+  actorType: actorTypeSchema,
+  displayName: z.string().min(1),
+});
+const createChannelBody = z.object({
+  name: z.string().min(1),
+  visibility: visibilitySchema.optional(),
+});
+const createThreadBody = z.object({
+  channelId: z.string().min(1),
+  parentMessageId: z.string().min(1),
+  visibility: visibilitySchema.optional(),
+});
+const appendMessageBody = z.object({
+  streamId: z.string().min(1),
+  streamType: streamTypeSchema,
+  parts: z.array(messagePartSchema).min(1),
+  idempotencyKey: z.string().min(1),
+  autoRequestOnDeny: z.boolean().optional(),
+});
+const redactMessageBody = z.object({ reason: z.string().optional() });
+const updateCursorBody = z.object({
+  streamId: z.string().min(1),
+  lastSeenSeq: z.number().int().nonnegative(),
+  lastAckSeq: z.number().int().nonnegative(),
+});
+const createGrantBody = z.object({
+  actorId: z.string().min(1),
+  resourceType: z.string().min(1),
+  resourceId: z.union([z.string(), z.null()]).optional(),
+  capability: z.string().min(1),
+  expiresAt: z.union([z.string(), z.null()]).optional(),
+  constraints: z.record(z.unknown()).optional(),
+});
+const createPermissionRequestBody = z.object({
+  action: z.string().min(1),
+  resourceType: z.string().min(1),
+  resourceId: z.union([z.string(), z.null()]).optional(),
+});
+const resolvePermissionRequestBody = z.object({
+  approve: z.boolean(),
+  notes: z.string().optional(),
+});
+const channelMemberBody = z.object({
+  actorId: z.string().min(1),
+  role: z.string().optional(),
+});
+const clientBody = z.object({
+  endpoint: z.string().min(1),
+  metadata: z.record(z.unknown()).optional(),
+});
 
 function parsePrincipal(headerValue: string | undefined): Principal | null {
-  if (!headerValue) {
-    return null;
-  }
+  if (!headerValue) return null;
   try {
-    const parsed = JSON.parse(headerValue) as Principal;
-    if (!parsed.actorId || !parsed.orgId || !Array.isArray(parsed.scopes) || !parsed.provider) {
-      return null;
-    }
-    return parsed;
+    const parsed = JSON.parse(headerValue);
+    const result = principalSchema.safeParse(parsed);
+    return result.success ? result.data : null;
   } catch {
     return null;
   }
 }
 
+function requirePrincipal(c: Context): { ok: true; principal: Principal } | { ok: false; response: Response } {
+  const principal = parsePrincipal(c.req.header("x-principal"));
+  if (!principal) {
+    return { ok: false, response: c.json({ error: "missing or invalid principal" }, 401) };
+  }
+  return { ok: true, principal };
+}
+
+function handleError(c: Context, error: unknown): Response {
+  if (error instanceof PermissionError) {
+    return c.json({ error: error.message, code: error.code, capability: error.capability, resourceType: error.resourceType, resourceId: error.resourceId }, 403);
+  }
+  if (error instanceof NotFoundError) {
+    return c.json({ error: error.message, code: error.code }, 404);
+  }
+  if (error instanceof ValidationError || error instanceof z.ZodError) {
+    const msg = error instanceof z.ZodError ? error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ") : error.message;
+    return c.json({ error: msg, code: "VALIDATION" }, 400);
+  }
+  if (error instanceof SyntaxError) {
+    return c.json({ error: "invalid json body", code: "VALIDATION" }, 400);
+  }
+  if (error instanceof Error) {
+    return c.json({ error: error.message, code: "ERROR" }, 400);
+  }
+  return c.json({ error: "unexpected error", code: "ERROR" }, 500);
+}
+
+async function parseJsonBody<T>(c: Context, schema: z.ZodType<T>): Promise<T> {
+  let raw: unknown;
+  try {
+    raw = await c.req.json();
+  } catch {
+    throw new SyntaxError("invalid json body");
+  }
+  return schema.parse(raw);
+}
+
 export function createApp(service: MessageLayerService): Hono {
   const app = new Hono();
 
+  // ── health ───────────────────────────────────────────────────────────────
   app.get("/health", (c) => c.json({ ok: true }));
 
-  function requirePrincipal(c: Context): Principal | Response {
-    const principal = parsePrincipal(c.req.header("x-principal"));
-    if (!principal) {
-      return c.json({ error: "missing or invalid principal" }, 401);
-    }
-    return principal;
-  }
-
-  function handleError(c: Context, error: unknown): Response {
-    if (error instanceof PermissionError) {
-      return c.json({ error: error.message }, 403);
-    }
-    if (error instanceof Error) {
-      return c.json({ error: error.message }, 400);
-    }
-    return c.json({ error: "unexpected error" }, 500);
-  }
-
+  // ── orgs / actors (unauthenticated bootstrap) ────────────────────────────
   app.post("/v1/orgs", async (c) => {
     try {
-      const body = await c.req.json<{ name: string }>();
+      const body = await parseJsonBody(c, createOrgBody);
       const orgId = await service.createOrg(body.name);
       return c.json({ orgId });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.post("/v1/actors", async (c) => {
     try {
-      const body = await c.req.json<{ orgId: string; actorType: "human" | "agent" | "app"; displayName: string }>();
+      const body = await parseJsonBody(c, createActorBody);
       const actorId = await service.createActor(body.orgId, body.actorType, body.displayName);
       return c.json({ actorId });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
-  app.post("/v1/channels", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+  // ── authenticated routes ─────────────────────────────────────────────────
+  const authed = (c: Context): { principal: Principal } | { response: Response } => {
+    const result = requirePrincipal(c);
+    return result.ok ? { principal: result.principal } : { response: result.response };
+  };
+
+  app.get("/v1/actors", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{ name: string; visibility?: "private" | "public" }>();
-      const channelId = await service.createChannel(principal, body.name, body.visibility ?? "private");
+      const actors = await service.listActorSummaries(auth.principal);
+      return c.json({ actors });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.get("/v1/members", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const members = await service.listMembers(auth.principal);
+      return c.json({ members });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  // channels
+  app.post("/v1/channels", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const body = await parseJsonBody(c, createChannelBody);
+      const channelId = await service.createChannel(auth.principal, body.name, body.visibility ?? "private");
       return c.json({ channelId });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.get("/v1/channels", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const channels = await service.listChannels(principal);
+      const channels = await service.listChannels(auth.principal);
       return c.json({ channels });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
-  app.post("/v1/threads", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+  app.post("/v1/channels/:channelId/members", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{
-        channelId: string;
-        parentMessageId: string;
-        visibility?: "private" | "public";
-      }>();
-      const threadId = await service.createThread(
-        principal,
-        body.channelId,
-        body.parentMessageId,
-        body.visibility ?? "private",
-      );
+      const body = await parseJsonBody(c, channelMemberBody);
+      await service.addChannelMember(auth.principal, c.req.param("channelId"), body.actorId, body.role ?? "member");
+      return c.json({ ok: true });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.delete("/v1/channels/:channelId/members/:actorId", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      await service.removeChannelMember(auth.principal, c.req.param("channelId"), c.req.param("actorId"));
+      return c.json({ ok: true });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.get("/v1/channels/:channelId/members", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const members = await service.listChannelMembers(auth.principal, c.req.param("channelId"));
+      return c.json({ members });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  // threads
+  app.post("/v1/threads", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const body = await parseJsonBody(c, createThreadBody);
+      const threadId = await service.createThread(auth.principal, body.channelId, body.parentMessageId, body.visibility ?? "private");
       return c.json({ threadId });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.get("/v1/channels/:channelId/threads", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const threads = await service.listThreads(principal, c.req.param("channelId"));
+      const threads = await service.listThreads(auth.principal, c.req.param("channelId"));
       return c.json({ threads });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
+  // messages
   app.post("/v1/messages", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{
-        streamId: string;
-        streamType: "channel" | "thread";
-        parts: Array<{
-          type: "text" | "tool_call" | "tool_result" | "artifact" | "approval_request" | "approval_response";
-          payload: Record<string, unknown>;
-        }>;
-        idempotencyKey: string;
-      }>();
-      const message = await service.appendMessage(principal, {
-        streamId: body.streamId,
-        streamType: body.streamType,
-        parts: body.parts,
-        idempotencyKey: body.idempotencyKey,
-      });
-      return c.json(message);
-    } catch (error) {
-      return handleError(c, error);
+      const body = await parseJsonBody(c, appendMessageBody);
+      const result = await service.appendMessage(auth.principal, body);
+      return c.json(result);
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.post("/v1/messages/:messageId/redact", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const body = await parseJsonBody(c, redactMessageBody);
+      await service.redactMessage(auth.principal, c.req.param("messageId"), body.reason ?? "");
+      return c.json({ ok: true });
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.get("/v1/streams/:streamId/messages", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
       const streamId = c.req.param("streamId");
       const afterSeq = Number(c.req.query("afterSeq") ?? "0");
       const limit = Number(c.req.query("limit") ?? "50");
-      const messages = await service.listMessages(principal, streamId, afterSeq, limit);
+      const messages = await service.listMessages(auth.principal, streamId, { afterSeq, limit });
       return c.json({ messages });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.get("/v1/streams/:streamId/subscribe", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
       const streamId = c.req.param("streamId");
       const fromSeq = Number(c.req.query("fromSeq") ?? "0");
-      const events = await service.subscribe(principal, streamId, fromSeq);
+      const events = await service.subscribe(auth.principal, streamId, { fromSeq });
       return c.json({ events });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
+  // cursors
   app.post("/v1/cursors", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{ streamId: string; lastSeenSeq: number; lastAckSeq: number }>();
-      await service.updateCursor(principal, body.streamId, body.lastSeenSeq, body.lastAckSeq);
+      const body = await parseJsonBody(c, updateCursorBody);
+      await service.updateCursor(auth.principal, body.streamId, body.lastSeenSeq, body.lastAckSeq);
       return c.json({ ok: true });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
-  app.post("/v1/grants", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+  app.get("/v1/streams/:streamId/cursor", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{
-        actorId: string;
-        resourceType: string;
-        resourceId: string | null;
-        capability: string;
-        expiresAt?: string | null;
-        constraints?: Record<string, unknown>;
-      }>();
+      const cursor = await service.getCursor(auth.principal, c.req.param("streamId"));
+      return c.json({ cursor });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  // grants + permission requests
+  app.post("/v1/grants", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const body = await parseJsonBody(c, createGrantBody);
       const grantId = await service.createGrant(
-        principal,
+        auth.principal,
         body.actorId,
         body.resourceType,
-        body.resourceId,
+        body.resourceId ?? null,
         body.capability,
         body.expiresAt ?? null,
         body.constraints ?? {},
       );
       return c.json({ grantId });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.post("/v1/grants/:grantId/revoke", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      await service.revokeGrant(principal, c.req.param("grantId"));
+      await service.revokeGrant(auth.principal, c.req.param("grantId"));
       return c.json({ ok: true });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.get("/v1/grants/check", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const actorId = c.req.query("actorId") ?? auth.principal.actorId;
+      const capability = c.req.query("capability");
+      if (!capability) {
+        return c.json({ error: "capability query param required", code: "VALIDATION" }, 400);
+      }
+      const hasGrant = await service.checkGrant(auth.principal.orgId, actorId, capability);
+      return c.json({ hasGrant });
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.post("/v1/permission-requests", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{
-        action: string;
-        resourceType: string;
-        resourceId: string | null;
-      }>();
+      const body = await parseJsonBody(c, createPermissionRequestBody);
       const requestId = await service.createPermissionRequest(
-        principal,
+        auth.principal,
         body.action,
         body.resourceType,
-        body.resourceId,
+        body.resourceId ?? null,
       );
       return c.json({ requestId });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.get("/v1/permission-requests", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const actorId = c.req.query("actorId");
-      const requests = await service.listOpenPermissionRequests(principal.orgId, actorId);
+      const actorId = c.req.query("actorId") ?? undefined;
+      const requests = await service.listOpenPermissionRequests(auth.principal.orgId, actorId);
       return c.json({ requests });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
   app.post("/v1/permission-requests/:requestId/resolve", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{ approve: boolean; notes?: string }>();
-      await service.resolvePermissionRequest(
-        principal,
+      const body = await parseJsonBody(c, resolvePermissionRequestBody);
+      const result = await service.resolvePermissionRequest(
+        auth.principal,
         c.req.param("requestId"),
         body.approve,
         body.notes ?? "",
       );
-      return c.json({ ok: true });
-    } catch (error) {
-      return handleError(c, error);
+      return c.json({ ok: true, ...result });
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
-  app.get("/v1/grants/check", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
-    try {
-      const actorId = c.req.query("actorId") ?? principal.actorId;
-      const capability = c.req.query("capability");
-      if (!capability) {
-        return c.json({ error: "capability query param required" }, 400);
-      }
-      const hasGrant = await service.checkGrant(principal.orgId, actorId, capability);
-      return c.json({ hasGrant });
-    } catch (error) {
-      return handleError(c, error);
-    }
-  });
-
-  app.get("/v1/permission-requests", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
-    try {
-      const actorId = c.req.query("actorId") ?? undefined;
-      const requests = await service.listOpenPermissionRequests(principal.orgId, actorId);
-      return c.json({ requests });
-    } catch (error) {
-      return handleError(c, error);
-    }
-  });
-
+  // clients
   app.post("/v1/clients", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const body = await c.req.json<{ endpoint: string; metadata?: Record<string, unknown> }>();
-      const clientId = await service.registerClient(principal, body.endpoint, body.metadata ?? {});
+      const body = await parseJsonBody(c, clientBody);
+      const clientId = await service.registerClient(auth.principal, body.endpoint, body.metadata ?? {});
       return c.json({ clientId });
-    } catch (error) {
-      return handleError(c, error);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
-  app.get("/v1/grants/check", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+  // audit
+  app.get("/v1/audit/rows", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const actorId = c.req.query("actorId");
-      const capability = c.req.query("capability");
-      if (!actorId || !capability) {
-        return c.json({ error: "missing actorId or capability" }, 400);
+      if (!auth.principal.scopes.includes("audit:read")) {
+        return c.json({ error: "missing audit:read scope", code: "PERMISSION_DENIED" }, 403);
       }
-      const hasGrant = await service.checkGrant(principal.orgId, actorId, capability);
-      return c.json({ hasGrant });
-    } catch (error) {
-      return handleError(c, error);
+      const rows = await service.auditRows(auth.principal.orgId);
+      return c.json({ rows });
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 
-  app.get("/v1/members", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
+  app.get("/v1/audit/verify", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
     try {
-      const members = await service.listMembers(principal);
-      return c.json({ members });
-    } catch (error) {
-      return handleError(c, error);
-    }
-  });
-
-  app.get("/v1/actors", async (c) => {
-    const principalOrResponse = requirePrincipal(c);
-    if (principalOrResponse instanceof Response) {
-      return principalOrResponse;
-    }
-    const principal = principalOrResponse;
-    try {
-      const actors = await service.listActorSummaries(principal);
-      return c.json({ actors });
-    } catch (error) {
-      return handleError(c, error);
+      if (!auth.principal.scopes.includes("audit:read")) {
+        return c.json({ error: "missing audit:read scope", code: "PERMISSION_DENIED" }, 403);
+      }
+      const result = await service.verifyAuditChain(auth.principal.orgId);
+      return c.json(result);
+    } catch (e) {
+      return handleError(c, e);
     }
   });
 

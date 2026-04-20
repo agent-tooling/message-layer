@@ -61,10 +61,13 @@ An append-only record in a stream. A message has:
 - `streamSeq` — its position in the stream
 - `actorId` — author
 - `createdAt`
-- `parts[]` — ordered list of typed message parts
+- `redacted` — boolean; `true` after a successful redact call
+- `redactedAt` — ISO-8601 or `null`
+- `parts[]` — ordered list of typed message parts (empty when `redacted`)
 
 Messages are **immutable** once appended. They may be marked `redacted`, but
-their slot in the stream is preserved.
+their slot in the stream is preserved; the `message.redacted` event carries
+the actor who performed the redaction and an optional reason string.
 
 ### Message part
 

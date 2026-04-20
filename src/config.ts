@@ -12,21 +12,31 @@ export type ServerConfig = {
     path: string;
   };
   plugins: PluginConfigEntry[];
+  /** Enable WebSocket upgrade on the HTTP server. Defaults to `true`. */
+  websocket: boolean;
 };
 
 function parseStorageAdapter(value: string | undefined): StorageAdapter {
-  return value === "sqlite" ? "sqlite" : "pglite";
+  // v1 supports only `pglite`. Unknown/legacy values (e.g. "sqlite") are
+  // coerced to the default and a warning is the caller's responsibility.
+  if (value && value !== "pglite") {
+    throw new Error(`unsupported STORAGE_ADAPTER: ${value}. Supported: pglite`);
+  }
+  return "pglite";
 }
 
 function parsePluginsFromEnv(value: string | undefined): PluginConfigEntry[] {
-  if (!value) {
-    return [];
-  }
+  if (!value) return [];
   return value
     .split(",")
     .map((name) => name.trim())
     .filter((name) => name.length > 0)
     .map((name) => ({ name }));
+}
+
+function parseBool(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
 export function defaultServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -35,28 +45,38 @@ export function defaultServerConfig(env: NodeJS.ProcessEnv = process.env): Serve
     port: Number(env.PORT ?? "3000"),
     storage: {
       adapter,
-      path: env.STORAGE_PATH ?? (adapter === "sqlite" ? ":memory:" : "memory://server"),
+      path: env.STORAGE_PATH ?? "memory://server",
     },
     plugins: parsePluginsFromEnv(env.PLUGINS),
+    websocket: parseBool(env.ENABLE_WEBSOCKET, true),
   };
 }
 
 export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const raw = env.MESSAGE_LAYER_CONFIG;
-  if (!raw) {
-    return defaultServerConfig(env);
-  }
+  if (!raw) return defaultServerConfig(env);
 
-  const parsed = JSON.parse(raw) as Partial<ServerConfig>;
+  let parsed: Partial<ServerConfig>;
+  try {
+    parsed = JSON.parse(raw) as Partial<ServerConfig>;
+  } catch {
+    throw new Error("MESSAGE_LAYER_CONFIG is not valid JSON");
+  }
   const defaults = defaultServerConfig(env);
+
+  const adapter = parsed.storage?.adapter ?? defaults.storage.adapter;
+  if (adapter !== "pglite") {
+    throw new Error(`unsupported storage.adapter: ${adapter as string}. Supported: pglite`);
+  }
 
   return {
     port: parsed.port ?? defaults.port,
     storage: {
-      adapter: parsed.storage?.adapter ?? defaults.storage.adapter,
+      adapter,
       path: parsed.storage?.path ?? defaults.storage.path,
     },
     plugins: parsed.plugins ?? defaults.plugins,
+    websocket: parsed.websocket ?? defaults.websocket,
   };
 }
 
