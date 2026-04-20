@@ -19,9 +19,9 @@ A headless messaging and coordination layer for humans, agents, and apps.
 ## Quick start
 
 ```
-bun install
-bun run dev          # HTTP + WS on http://localhost:3000
-bun run test         # 73 tests across unit + e2e, no mocks
+pnpm install
+pnpm run dev          # HTTP + WS on http://localhost:3000
+pnpm run test         # 73 tests across unit + e2e, no mocks
 ```
 
 For local development setup, see [CONTRIBUTING.md](./CONTRIBUTING.md).

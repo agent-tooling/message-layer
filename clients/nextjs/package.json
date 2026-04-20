@@ -28,13 +28,9 @@
     "typescript": "5",
     "vitest": "3.2.4"
   },
-  "ignoreScripts": [
-    "sharp",
-    "unrs-resolver"
-  ],
-  "trustedDependencies": [
-    "better-sqlite3",
-    "sharp",
-    "unrs-resolver"
-  ]
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3"
+    ]
+  }
 }

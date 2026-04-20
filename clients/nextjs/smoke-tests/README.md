@@ -16,7 +16,7 @@ This suite validates the most important end-to-end v1 use cases for the consolid
 
 ```bash
 cd /Users/andre.landgraf/Workspaces/personal/agent-tooling/message-layer
-bun run dev
+pnpm run dev
 ```
 
 2. Start the Next.js web client:
@@ -24,9 +24,9 @@ bun run dev
 ```bash
 cd /Users/andre.landgraf/Workspaces/personal/agent-tooling/message-layer/clients/nextjs
 cp -n .env.local.example .env.local
-bun install
-bunx @better-auth/cli migrate --config ./lib/auth.ts --yes
-bun run dev
+pnpm install
+pnpm dlx @better-auth/cli migrate --config ./lib/auth.ts --yes
+pnpm run dev
 ```
 
 3. Use agent-browser in a dedicated session:

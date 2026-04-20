@@ -12,8 +12,8 @@
     "test:watch": "vitest",
     "client:terminal": "tsx clients/terminal/client.ts",
     "client:terminal:demo": "tsx clients/terminal/client.ts --smoke",
-    "client:nextjs": "bun run --cwd clients/nextjs dev",
-    "client:nextjs:build": "bun run --cwd clients/nextjs build"
+    "client:nextjs": "pnpm --dir clients/nextjs run dev",
+    "client:nextjs:build": "pnpm --dir clients/nextjs run build"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.3.11",
@@ -31,7 +31,7 @@
     "typescript": "5.8.3",
     "vitest": "3.2.4"
   },
-  "packageManager": "bun@1.2.16",
+  "packageManager": "pnpm@10.33.0",
   "engines": {
     "node": ">=22"
   }

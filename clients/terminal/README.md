@@ -14,13 +14,13 @@ Two modes backed by the message-layer v1 HTTP and WebSocket transports.
 Start the server first:
 
 ```
-bun run dev
+pnpm run dev
 ```
 
 Then launch the terminal UI:
 
 ```
-bun run client:terminal
+pnpm run client:terminal
 ```
 
 Optional env vars:
@@ -71,6 +71,6 @@ returns `{ denied, requestId, capability, ... }` instead of `403`.
 
 ## Smoke mode
 
-`bun run client:terminal:demo` runs the client with `--smoke`. It exits
+`pnpm run client:terminal:demo` runs the client with `--smoke`. It exits
 immediately after printing `terminal-client-smoke-ok` and is wired into the
 Vitest e2e suite.

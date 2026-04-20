@@ -1,15 +1,15 @@
 import { describe, expect, test } from "vitest";
 import { spawn } from "node:child_process";
-import { resolve } from "node:path";
+import { resolve as resolvePath } from "node:path";
 
-const PROJECT_ROOT = resolve(import.meta.dirname, "../..");
-const BUN = process.execPath.endsWith("bun") ? process.execPath : (process.env.BUN_BINARY ?? "bun");
+const PROJECT_ROOT = resolvePath(import.meta.dirname, "../..");
+const CLIENT_ENTRY = resolvePath(PROJECT_ROOT, "clients/terminal/client.ts");
 
 function runTerminalClientSmoke(): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(
-      BUN,
-      ["x", "tsx", "clients/terminal/client.ts", "--smoke"],
+      process.execPath,
+      ["--import", "tsx", CLIENT_ENTRY, "--smoke"],
       {
         cwd: PROJECT_ROOT,
         env: process.env,

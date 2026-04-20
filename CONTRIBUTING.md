@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Node.js ≥ 22
-- [Bun](https://bun.sh) (pinned in `package.json` → `packageManager`)
+- [pnpm](https://pnpm.io) (pinned in `package.json` → `packageManager`)
 
 No Docker, no hosted database, no external services are required to run the
 full test suite. All tests exercise a real PGlite database, a real Hono
@@ -12,18 +12,18 @@ server, and a real WebSocket server — no mocks of core systems.
 ## Install
 
 ```
-bun install
+pnpm install
 ```
 
 ## Run locally
 
 ```
-bun run dev                    # starts the HTTP + WS server on PORT (default 3000)
-bun run test                   # full unit + e2e suite
-bun run test:watch             # watch mode
-bun run build                  # typecheck + emit to dist/
-bun run client:terminal        # Pi agent REPL
-bun run client:terminal:demo   # agent-kernel smoke run (no API keys required)
+pnpm run dev                    # starts the HTTP + WS server on PORT (default 3000)
+pnpm run test                   # full unit + e2e suite
+pnpm run test:watch             # watch mode
+pnpm run build                  # typecheck + emit to dist/
+pnpm run client:terminal        # Pi agent REPL
+pnpm run client:terminal:demo   # agent-kernel smoke run (no API keys required)
 ```
 
 ## Layout

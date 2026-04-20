@@ -17,8 +17,8 @@ Team + agents reference web client for `message-layer`, acting as the proof-of-c
 Run the `message-layer` server first (from the repository root):
 
 ```bash
-bun install
-bun run dev
+pnpm install
+pnpm run dev
 ```
 
 Then run the web client:
@@ -26,8 +26,8 @@ Then run the web client:
 ```bash
 cd clients/nextjs
 cp -n .env.local.example .env.local
-bun install
-bun run dev
+pnpm install
+pnpm run dev
 ```
 
 The app serves on `http://localhost:3001`.
@@ -38,7 +38,7 @@ The auth schema is managed by Better Auth. The first time you run the client, ap
 
 ```bash
 cd clients/nextjs
-bunx @better-auth/cli migrate --config ./lib/auth.ts --yes
+pnpm dlx @better-auth/cli migrate --config ./lib/auth.ts --yes
 ```
 
 ## Agent onboarding surface
