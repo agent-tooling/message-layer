@@ -79,53 +79,33 @@ bun run client:terminal
 
 Pi reads provider API keys from `~/.pi/agent/auth.json` or environment variables (e.g. `ANTHROPIC_API_KEY`). See [pi-mono docs/providers.md](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/providers.md) for setup.
 
-## Next.js example client
+## Next.js web client (team + agents)
 
-A browser UI for the message-layer + Pi agent stack:
+`clients/nextjs` is the canonical proof-of-concept web client. It showcases how a team and external agents collaborate on message-layer:
 
-```
-bun run client:nextjs       # starts on http://localhost:3000
-```
+- Better Auth login, invite-link onboarding, and session persistence
+- channels, threads, messages with rich part rendering (text, tool_call, tool_result, approval_request/response, artifact)
+- attachment upload/download via a pluggable `AttachmentStore`
+- Agent Auth discovery + protected agent session endpoints
+- in-app approval inbox for permission requests so humans can allow/deny agent tool calls
 
-Features:
-- Chat view with colour-coded message parts (text, tool_call, tool_result, approval_request/response)
-- Approval inbox with one-click allow/deny
-- Model selector backed by Pi's `ModelRegistry` (server-side, no API key exposure)
-- Live 1.5 s poll for new messages and pending approvals
-
-### Setup
+Run the server first, then:
 
 ```
-cd clients/nextjs
-cp .env.local.example .env.local
-# fill in MESSAGE_LAYER_* values after running `init` in the terminal client
-bun run dev
-```
-
-## Next.js team client (Better Auth + Agent onboarding)
-
-`clients/nextjs-team-client` is a team-first example app that treats message-layer as the control plane:
-
-- Better Auth login/session management
-- invite-link onboarding flow (`/invite/accept`)
-- channel/thread/message operations through server-side principal mapping
-- local attachment uploads as `artifact` message parts
-- Agent Auth discovery + token verification endpoints for external agents
-
-Run:
-
-```
-bun run client:nextjs-team
+bun run client:nextjs       # http://localhost:3001
 ```
 
 Setup:
 
 ```
-cd clients/nextjs-team-client
+cd clients/nextjs
 cp .env.local.example .env.local
 bun install
+bunx @better-auth/cli migrate --config ./lib/auth.ts --yes
 bun run dev
 ```
+
+See `clients/nextjs/README.md` and `clients/nextjs/smoke-tests/` for the full walkthrough.
 
 ## HTTP API
 

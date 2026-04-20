@@ -303,3 +303,37 @@ export async function createThread(principal: MlPrincipal, channelId: string, pa
   });
   return result.threadId;
 }
+
+export type PermissionRequestRow = {
+  requestId: string;
+  actorId: string;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  createdAt: string;
+};
+
+export async function listPermissionRequests(
+  principal: MlPrincipal,
+  actorId?: string,
+): Promise<PermissionRequestRow[]> {
+  const query = actorId ? `?actorId=${encodeURIComponent(actorId)}` : "";
+  const result = await mlRequest<{ requests: PermissionRequestRow[] }>(
+    `/v1/permission-requests${query}`,
+    { principal },
+  );
+  return result.requests;
+}
+
+export async function resolvePermissionRequest(
+  principal: MlPrincipal,
+  requestId: string,
+  approve: boolean,
+  notes: string,
+): Promise<void> {
+  await mlRequest(`/v1/permission-requests/${requestId}/resolve`, {
+    method: "POST",
+    principal,
+    body: { approve, notes },
+  });
+}

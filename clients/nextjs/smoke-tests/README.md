@@ -1,29 +1,31 @@
-# Next.js Team Client Smoke Tests
+# Next.js Web Client Smoke Tests
 
-This suite validates the most important end-to-end v1 use cases for:
+This suite validates the most important end-to-end v1 use cases for the consolidated `clients/nextjs` web app:
 
 - Better Auth user login and onboarding
 - team messaging UX (channels, messages, threads)
 - invite-based member onboarding
 - attachment upload + artifact message rendering
+- rich message-part rendering and agent approval inbox
 - Agent Auth discovery/session paths
 - message-layer control-plane coverage from UI routes
 
 ## Environment setup
 
-1. Start message-layer server from repo root:
+1. Start message-layer server from the repository root:
 
 ```bash
 cd /Users/andre.landgraf/Workspaces/personal/agent-tooling/message-layer
 bun run dev
 ```
 
-2. Start Next.js team client:
+2. Start the Next.js web client:
 
 ```bash
-cd /Users/andre.landgraf/Workspaces/personal/agent-tooling/message-layer/clients/nextjs-team-client
+cd /Users/andre.landgraf/Workspaces/personal/agent-tooling/message-layer/clients/nextjs
 cp -n .env.local.example .env.local
 bun install
+bunx @better-auth/cli migrate --config ./lib/auth.ts --yes
 bun run dev
 ```
 
@@ -48,6 +50,7 @@ Run in this order because later tests depend on data created in earlier ones:
 4. `04-attachments.md`
 5. `05-agent-onboarding.md`
 6. `06-control-plane-sanity.md`
+7. `07-agent-approval-inbox.md`
 
 ## Completion bar
 

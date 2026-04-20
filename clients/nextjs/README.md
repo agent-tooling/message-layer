@@ -1,55 +1,57 @@
-# message-layer × pi — Next.js example client
+# nextjs
 
-A browser UI for the message-layer + Pi coding agent stack.
+Team + agents reference web client for `message-layer`, acting as the proof-of-concept control-plane UI.
 
-## Features
+## What this showcases
 
-- **Chat view** — renders all message part types: `text`, `tool_call`, `tool_result`, `approval_request`, `approval_response`
-- **Approval inbox** — one-click allow/deny for tool calls waiting on human confirmation
-- **Model selector** — lists available models via Pi's `ModelRegistry` (server-side, API keys never reach the browser)
-- **Live polling** — 1.5 s refresh for new messages and pending approvals
+- Better Auth email/password login with session persistence
+- Invite-link onboarding for teammates (first user bootstraps the workspace)
+- Channels, threads, messages, and live polling for new activity
+- Rich message-part rendering: text, tool_call, tool_result, approval_request, approval_response, artifact attachments
+- Attachment upload/download with local dev storage (`AttachmentStore` interface pluggable for S3 later)
+- Agent Auth discovery document + protected session endpoint so external coding agents can onboard
+- In-app approval inbox for permission requests so humans can allow/deny agent tool calls in real time
 
-## Quick start
+## Setup
 
-1. Start the message-layer server from the repo root:
-   ```
-   bun run dev
-   ```
+Run the `message-layer` server first (from the repository root):
 
-2. In the terminal client, run `init` to create an org, actors, and channel:
-   ```
-   bun run client:terminal
-   > init
-   # copy the org/actor/channel IDs printed in output
-   ```
+```bash
+bun install
+bun run dev
+```
 
-3. Configure this app:
-   ```
-   cp .env.local.example .env.local
-   # fill in MESSAGE_LAYER_* values from step 2
-   ```
+Then run the web client:
 
-4. Start the Next.js dev server:
-   ```
-   bun run dev        # (from this directory)
-   # or from repo root:
-   bun run client:nextjs
-   ```
+```bash
+cd clients/nextjs
+cp -n .env.local.example .env.local
+bun install
+bun run dev
+```
 
-5. Open [http://localhost:3000](http://localhost:3000)
+The app serves on `http://localhost:3001`.
 
-## Configuration
+### First-time Better Auth database
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `NEXT_PUBLIC_MESSAGE_LAYER_URL` | message-layer server URL | `http://127.0.0.1:3000` |
-| `MESSAGE_LAYER_ORG_ID` | org to connect to | `dev-org` |
-| `MESSAGE_LAYER_ACTOR_ID` | human actor (you) | `dev-actor` |
-| `MESSAGE_LAYER_AGENT_ACTOR_ID` | agent actor id | |
-| `MESSAGE_LAYER_CHANNEL_ID` | channel to display | |
-| `MESSAGE_LAYER_SCOPES` | principal scopes | `channel:create,message:append,grant:create` |
+The auth schema is managed by Better Auth. The first time you run the client, apply migrations:
 
-## API routes
+```bash
+cd clients/nextjs
+bunx @better-auth/cli migrate --config ./lib/auth.ts --yes
+```
 
-- `GET /api/agent/models` — list available Pi models (requires API keys in `~/.pi/agent/auth.json`)
-- `POST /api/agent/models` — set active model `{ modelId: "provider/id" }`
+## Agent onboarding surface
+
+- Discovery document: `GET /.well-known/agent-configuration`
+- Auth handler base: `/api/auth/[...all]`
+- Protected session probe: `GET /api/team/agent/session` (returns `401` without a valid agent bearer token)
+
+External agents obtain tokens through the Agent Auth flow exposed by Better Auth, then call the scoped message-layer operations through this app's routes.
+
+## Runtime notes
+
+- Single default org per instance. Non-first users must accept an invite to join.
+- Attachments live on disk under `.data/attachments/`. The `lib/attachment-store.ts` interface allows swapping in S3/presigned uploads.
+- Local app state (user→actor map, invites, attachments metadata) lives in `.data/team-client.db` (SQLite).
+- Better Auth schema lives in `.data/better-auth.db` (SQLite).
