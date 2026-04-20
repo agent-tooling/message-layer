@@ -238,21 +238,72 @@ export async function listActors(
   return result.actors;
 }
 
+export type MlMessageRecord = {
+  id: string;
+  streamSeq: number;
+  actorId: string;
+  createdAt: string;
+  redacted?: boolean;
+  redactedAt?: string | null;
+  parts: Array<{ type: string; payload: Record<string, unknown> }>;
+};
+
 export async function listMessages(
   principal: MlPrincipal,
   streamId: string,
   afterSeq = 0,
-): Promise<Array<{ id: string; streamSeq: number; actorId: string; createdAt: string; parts: Array<{ type: string; payload: Record<string, unknown> }> }>> {
-  const result = await mlRequest<{
-    messages: Array<{
-      id: string;
-      streamSeq: number;
-      actorId: string;
-      createdAt: string;
-      parts: Array<{ type: string; payload: Record<string, unknown> }>;
-    }>;
-  }>(`/v1/streams/${streamId}/messages?afterSeq=${afterSeq}&limit=100`, { principal });
+): Promise<MlMessageRecord[]> {
+  const result = await mlRequest<{ messages: MlMessageRecord[] }>(
+    `/v1/streams/${streamId}/messages?afterSeq=${afterSeq}&limit=100`,
+    { principal },
+  );
   return result.messages;
+}
+
+export async function redactMessage(
+  principal: MlPrincipal,
+  messageId: string,
+  reason?: string,
+): Promise<void> {
+  await mlRequest(`/v1/messages/${messageId}/redact`, {
+    method: "POST",
+    principal,
+    body: { reason: reason ?? "" },
+  });
+}
+
+export async function addChannelMember(
+  principal: MlPrincipal,
+  channelId: string,
+  actorId: string,
+  role: string = "member",
+): Promise<void> {
+  await mlRequest(`/v1/channels/${channelId}/members`, {
+    method: "POST",
+    principal,
+    body: { actorId, role },
+  });
+}
+
+export async function removeChannelMember(
+  principal: MlPrincipal,
+  channelId: string,
+  actorId: string,
+): Promise<void> {
+  await mlRequest(`/v1/channels/${channelId}/members/${actorId}`, {
+    method: "DELETE",
+    principal,
+  });
+}
+
+export async function listChannelMembers(
+  principal: MlPrincipal,
+  channelId: string,
+): Promise<Array<{ actorId: string; role: string; createdAt: string }>> {
+  const result = await mlRequest<{
+    members: Array<{ actorId: string; role: string; createdAt: string }>;
+  }>(`/v1/channels/${channelId}/members`, { principal });
+  return result.members;
 }
 
 export async function appendMessage(

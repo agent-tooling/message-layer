@@ -9,6 +9,7 @@
 
 import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
+import { WebSocket as NodeWebSocket } from "ws";
 import { AgentKernel } from "../../src/agent-kernel/index.js";
 import type { KernelConfig } from "../../src/agent-kernel/index.js";
 
@@ -59,6 +60,56 @@ function splitArgs(command: string): string[] {
 
 function toNullableResourceId(s: string): string | null {
   return s === "none" ? null : s;
+}
+
+function wsUrl(baseUrl: string): string {
+  return baseUrl.replace(/^http/i, (m) => (m.toLowerCase() === "http" ? "ws" : "wss")) + "/v1/ws";
+}
+
+async function wsSubscribe(baseUrl: string, principal: Principal, streamId: string, fromSeq: number): Promise<void> {
+  const url = wsUrl(baseUrl);
+  console.log(dim(`connecting ${url} …`));
+  await new Promise<void>((resolve) => {
+    const ws = new NodeWebSocket(url, {
+      headers: { "x-principal": JSON.stringify(principal) },
+    });
+    let finished = false;
+    const stop = (reason?: string): void => {
+      if (finished) return;
+      finished = true;
+      try { ws.close(1000, reason ?? "client-stop"); } catch { /* ignore */ }
+      process.off("SIGINT", sigint);
+      resolve();
+    };
+    const sigint = (): void => stop("sigint");
+    process.once("SIGINT", sigint);
+
+    ws.on("open", () => {
+      ws.send(JSON.stringify({ type: "subscribe", streamId, fromSeq }));
+      console.log(dim("subscribed; Ctrl+C to stop"));
+    });
+    ws.on("message", (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString()) as { type: string } & Record<string, unknown>;
+        if (msg.type === "event") {
+          const e = msg.event as { type: string; streamSeq: number | null; payload: Record<string, unknown> };
+          console.log(`${yellow("event")} ${e.type} seq=${e.streamSeq ?? "-"} ${dim(JSON.stringify(e.payload))}`);
+        } else if (msg.type === "error") {
+          console.error(red(`ws-error: ${JSON.stringify(msg)}`));
+          stop("error");
+        } else {
+          console.log(dim(`ws: ${JSON.stringify(msg)}`));
+        }
+      } catch (err) {
+        console.error(red(`ws-parse: ${String(err)}`));
+      }
+    });
+    ws.on("close", () => stop("closed"));
+    ws.on("error", (err) => {
+      console.error(red(`ws-error: ${(err as Error).message}`));
+      stop("error");
+    });
+  });
 }
 
 async function apiCall(
@@ -132,18 +183,27 @@ ${bold("message-layer raw REPL")}
   set-principal <actorId> <orgId> [scope1,scope2]
   create-org <name>
   create-actor <orgId> <human|agent|app> <displayName>
-  create-channel <name>
+  create-channel <name> [visibility]             visibility: private|public (default private)
   grant <actorId> <resourceType> <resourceId|none> <capability>
   revoke <grantId>
-  post <streamId> <channel|thread> <text>
+  post <streamId> <channel|thread> <text> [--auto-request]
+  redact <messageId> [reason]
   list <streamId> [afterSeq] [limit]
-  subscribe <streamId> [fromSeq]
+  subscribe <streamId> [fromSeq]                 HTTP replay
+  ws-subscribe <streamId> [fromSeq]              live WebSocket push (Ctrl+C to stop)
   create-thread <channelId> <parentMessageId>
+  channel-add-member <channelId> <actorId> [role]
+  channel-remove-member <channelId> <actorId>
+  channel-members <channelId>
   request-permission <action> <resourceType> <resourceId|none>
   resolve-permission <requestId> <approve:true|false> [notes]
   list-permissions [actorId]
+  grant-check <actorId> <capability>
   update-cursor <streamId> <lastSeenSeq> <lastAckSeq>
+  get-cursor <streamId>
   register-client <endpoint>
+  audit-rows
+  audit-verify
   back                       Return to agent REPL
   exit
 `);
@@ -567,9 +627,14 @@ async function main(): Promise<void> {
         }
 
         if (cmd === "create-channel") {
-          const name = rest.join(" ");
-          if (!name) throw new Error("usage: create-channel <name>");
-          const payload = (await apiCall(rawState, "/v1/channels", { method: "POST", body: { name }, requirePrincipal: true })) as { channelId: string };
+          const [first, maybeVisibility] = rest;
+          const visibility = maybeVisibility === "public" || maybeVisibility === "private" ? maybeVisibility : undefined;
+          const nameParts = visibility ? [first] : rest;
+          const name = nameParts.filter(Boolean).join(" ");
+          if (!name) throw new Error("usage: create-channel <name> [private|public]");
+          const body: Record<string, unknown> = { name };
+          if (visibility) body.visibility = visibility;
+          const payload = (await apiCall(rawState, "/v1/channels", { method: "POST", body, requirePrincipal: true })) as { channelId: string };
           rawState.channelId = payload.channelId;
           console.log(payload);
           continue;
@@ -591,11 +656,31 @@ async function main(): Promise<void> {
 
         if (cmd === "post") {
           const [streamId, streamType, ...textParts] = rest;
-          const text = textParts.join(" ");
-          if (!streamId || !streamType || !text) throw new Error("usage: post <streamId> <channel|thread> <text>");
+          const autoRequest = textParts.includes("--auto-request");
+          const textWords = textParts.filter((w) => w !== "--auto-request");
+          const text = textWords.join(" ");
+          if (!streamId || !streamType || !text) throw new Error("usage: post <streamId> <channel|thread> <text> [--auto-request]");
           console.log(await apiCall(rawState, "/v1/messages", {
             method: "POST",
-            body: { streamId, streamType, parts: [{ type: "text", payload: { text } }], idempotencyKey: `terminal-${Date.now()}` },
+            body: {
+              streamId,
+              streamType,
+              parts: [{ type: "text", payload: { text } }],
+              idempotencyKey: `terminal-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+              ...(autoRequest ? { autoRequestOnDeny: true } : {}),
+            },
+            requirePrincipal: true,
+          }));
+          continue;
+        }
+
+        if (cmd === "redact") {
+          const [messageId, ...reasonParts] = rest;
+          if (!messageId) throw new Error("usage: redact <messageId> [reason]");
+          const reason = reasonParts.join(" ");
+          console.log(await apiCall(rawState, `/v1/messages/${messageId}/redact`, {
+            method: "POST",
+            body: { reason },
             requirePrincipal: true,
           }));
           continue;
@@ -615,10 +700,53 @@ async function main(): Promise<void> {
           continue;
         }
 
+        if (cmd === "ws-subscribe") {
+          const [streamId, fromSeq = "0"] = rest;
+          if (!streamId) throw new Error("usage: ws-subscribe <streamId> [fromSeq]");
+          if (!rawState.principal) throw new Error("principal required; set one with set-principal");
+          await wsSubscribe(rawState.baseUrl, rawState.principal, streamId, Number(fromSeq));
+          continue;
+        }
+
         if (cmd === "create-thread") {
           const [chId, parentMessageId] = rest;
           if (!chId || !parentMessageId) throw new Error("usage: create-thread <channelId> <parentMessageId>");
           console.log(await apiCall(rawState, "/v1/threads", { method: "POST", body: { channelId: chId, parentMessageId }, requirePrincipal: true }));
+          continue;
+        }
+
+        if (cmd === "channel-add-member") {
+          const [chId, actorId, role = "member"] = rest;
+          if (!chId || !actorId) throw new Error("usage: channel-add-member <channelId> <actorId> [role]");
+          console.log(await apiCall(rawState, `/v1/channels/${chId}/members`, {
+            method: "POST",
+            body: { actorId, role },
+            requirePrincipal: true,
+          }));
+          continue;
+        }
+
+        if (cmd === "channel-remove-member") {
+          const [chId, actorId] = rest;
+          if (!chId || !actorId) throw new Error("usage: channel-remove-member <channelId> <actorId>");
+          console.log(await apiCall(rawState, `/v1/channels/${chId}/members/${actorId}`, {
+            method: "DELETE",
+            requirePrincipal: true,
+          }));
+          continue;
+        }
+
+        if (cmd === "channel-members") {
+          const [chId] = rest;
+          if (!chId) throw new Error("usage: channel-members <channelId>");
+          console.log(JSON.stringify(await apiCall(rawState, `/v1/channels/${chId}/members`, { requirePrincipal: true }), null, 2));
+          continue;
+        }
+
+        if (cmd === "grant-check") {
+          const [actorId, capability] = rest;
+          if (!actorId || !capability) throw new Error("usage: grant-check <actorId> <capability>");
+          console.log(await apiCall(rawState, `/v1/grants/check?actorId=${encodeURIComponent(actorId)}&capability=${encodeURIComponent(capability)}`, { requirePrincipal: true }));
           continue;
         }
 
@@ -652,10 +780,27 @@ async function main(): Promise<void> {
           continue;
         }
 
+        if (cmd === "get-cursor") {
+          const [streamId] = rest;
+          if (!streamId) throw new Error("usage: get-cursor <streamId>");
+          console.log(await apiCall(rawState, `/v1/streams/${streamId}/cursor`, { requirePrincipal: true }));
+          continue;
+        }
+
         if (cmd === "register-client") {
           const [endpoint] = rest;
           if (!endpoint) throw new Error("usage: register-client <endpoint>");
           console.log(await apiCall(rawState, "/v1/clients", { method: "POST", body: { endpoint }, requirePrincipal: true }));
+          continue;
+        }
+
+        if (cmd === "audit-rows") {
+          console.log(JSON.stringify(await apiCall(rawState, "/v1/audit/rows", { requirePrincipal: true }), null, 2));
+          continue;
+        }
+
+        if (cmd === "audit-verify") {
+          console.log(await apiCall(rawState, "/v1/audit/verify", { requirePrincipal: true }));
           continue;
         }
 
