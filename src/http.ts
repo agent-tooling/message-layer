@@ -265,6 +265,40 @@ export function createApp(service: MessageLayerService): Hono {
     }
   });
 
+  app.get("/v1/grants/check", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const actorId = c.req.query("actorId") ?? principal.actorId;
+      const capability = c.req.query("capability");
+      if (!capability) {
+        return c.json({ error: "capability query param required" }, 400);
+      }
+      const hasGrant = await service.checkGrant(principal.orgId, actorId, capability);
+      return c.json({ hasGrant });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
+  app.get("/v1/permission-requests", async (c) => {
+    const principalOrResponse = requirePrincipal(c);
+    if (principalOrResponse instanceof Response) {
+      return principalOrResponse;
+    }
+    const principal = principalOrResponse;
+    try {
+      const actorId = c.req.query("actorId") ?? undefined;
+      const requests = await service.listOpenPermissionRequests(principal.orgId, actorId);
+      return c.json({ requests });
+    } catch (error) {
+      return handleError(c, error);
+    }
+  });
+
   app.post("/v1/clients", async (c) => {
     const principalOrResponse = requirePrincipal(c);
     if (principalOrResponse instanceof Response) {

@@ -11,11 +11,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "client:terminal": "tsx clients/terminal/client.ts",
-    "client:terminal:demo": "tsx clients/terminal/client.ts --smoke"
+    "client:terminal:demo": "tsx clients/terminal/client.ts --smoke",
+    "client:nextjs": "bun run --cwd clients/nextjs dev",
+    "client:nextjs:build": "bun run --cwd clients/nextjs build"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.3.11",
     "@hono/node-server": "^1.14.4",
+    "@mariozechner/pi-ai": "^0.66.1",
+    "@mariozechner/pi-coding-agent": "^0.66.1",
     "hono": "^4.9.7",
     "ws": "^8.18.3",
     "zod": "^3.25.76"

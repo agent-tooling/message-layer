@@ -479,6 +479,44 @@ export class MessageLayer {
     return clientId;
   }
 
+  async checkGrant(
+    orgId: string,
+    actorId: string,
+    capability: string,
+  ): Promise<boolean> {
+    const row = await this.queryOne(
+      `SELECT 1 FROM grants
+       WHERE org_id=? AND actor_id=? AND capability=? AND active=1
+         AND (expires_at IS NULL OR expires_at>?)
+       LIMIT 1`,
+      [orgId, actorId, capability, this.now()],
+    );
+    return Boolean(row);
+  }
+
+  async listOpenPermissionRequests(
+    orgId: string,
+    actorId?: string,
+  ): Promise<Array<{ requestId: string; actorId: string; action: string; resourceType: string; resourceId: string | null; createdAt: string }>> {
+    const rows = actorId
+      ? await this.query<{ id: string; actor_id: string; action: string; resource_type: string; resource_id: string | null; created_at: string }>(
+          "SELECT id,actor_id,action,resource_type,resource_id,created_at FROM permission_requests WHERE org_id=? AND actor_id=? AND status='open' ORDER BY created_at ASC",
+          [orgId, actorId],
+        )
+      : await this.query<{ id: string; actor_id: string; action: string; resource_type: string; resource_id: string | null; created_at: string }>(
+          "SELECT id,actor_id,action,resource_type,resource_id,created_at FROM permission_requests WHERE org_id=? AND status='open' ORDER BY created_at ASC",
+          [orgId],
+        );
+    return rows.map((r) => ({
+      requestId: r.id,
+      actorId: r.actor_id,
+      action: r.action,
+      resourceType: r.resource_type,
+      resourceId: r.resource_id,
+      createdAt: r.created_at,
+    }));
+  }
+
   async auditRows(orgId: string): Promise<Array<{ eventType: string; payload: Record<string, unknown>; eventHash: string; createdAt: string }>> {
     const rows = await this.query<{ event_type: string; payload_json: Record<string, unknown>; event_hash: string; created_at: string }>(
       "SELECT event_type,payload_json,event_hash,created_at FROM audit_events WHERE org_id=? ORDER BY audit_seq ASC",
