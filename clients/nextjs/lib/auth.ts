@@ -14,9 +14,21 @@ import { createInvite } from "@/lib/app-db";
 
 const authDb = new Database(`${process.cwd()}/.data/better-auth.db`);
 
+// Local dev + smoke tests reach the app on both `localhost:3001` and
+// `127.0.0.1:3001`. Better Auth defaults to rejecting any origin that does
+// not match `baseURL` exactly (403 "Invalid origin"). Adding both here
+// preserves the CSRF check while accommodating the documented workflow.
+const trustedOrigins = [
+  env.BETTER_AUTH_URL,
+  env.NEXT_PUBLIC_APP_URL,
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+];
+
 export const auth = betterAuth({
   secret: env.BETTER_AUTH_SECRET,
   baseURL: env.BETTER_AUTH_URL,
+  trustedOrigins: Array.from(new Set(trustedOrigins)),
   database: authDb,
   emailAndPassword: {
     enabled: true,

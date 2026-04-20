@@ -21,7 +21,20 @@ const adminScopes = [
   "message:append",
   "grant:create",
 ];
-const inFlightPrincipalResolutions = new Map<string, Promise<MlPrincipal>>();
+
+// Next.js 16 / Turbopack can give each route handler chunk its own copy of
+// this module in dev mode. A module-scoped Map therefore does not dedupe
+// concurrent principal resolutions across different /api/team/* handlers,
+// which caused `createActor` to run multiple times for the same user and
+// leaked duplicate actor records into message-layer. Hoist the dedup map
+// onto `globalThis` so every module instance shares the same lock table.
+type InflightMap = Map<string, Promise<MlPrincipal>>;
+const globalScope = globalThis as typeof globalThis & {
+  __mlInflightPrincipals?: InflightMap;
+};
+const inFlightPrincipalResolutions: InflightMap =
+  globalScope.__mlInflightPrincipals ?? new Map<string, Promise<MlPrincipal>>();
+globalScope.__mlInflightPrincipals = inFlightPrincipalResolutions;
 
 async function mlRequest<T>(
   path: string,
@@ -101,6 +114,9 @@ export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrinci
   }
 
   const pending = (async (): Promise<MlPrincipal> => {
+    // Double-check under the inflight lock — guards against a race where
+    // another request finished after our caller's first `getUserActorMap`
+    // read but before this lock was acquired.
     const existing = getUserActorMap(user.id);
     if (existing) {
       const principal: MlPrincipal = {
