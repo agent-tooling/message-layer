@@ -8,7 +8,11 @@ import {
   ensureUserPrincipal,
   getDefaultChannelId,
   listChannels,
+  listKnowledge,
   listMessages,
+  listStreamArtifacts,
+  promoteKnowledge,
+  registerArtifact,
 } from "@/lib/message-layer";
 import { createInvite } from "@/lib/app-db";
 
@@ -82,6 +86,52 @@ export const auth = betterAuth({
             },
           },
         },
+        {
+          name: "artifacts.list",
+          description: "List artifacts attached to a channel or thread",
+          input: {
+            type: "object",
+            required: ["streamId"],
+            properties: { streamId: { type: "string" } },
+          },
+        },
+        {
+          name: "artifacts.upload",
+          description: "Upload an artifact (binary blob) to a channel or thread",
+          input: {
+            type: "object",
+            required: ["streamId", "filename", "contentType", "contentBase64"],
+            properties: {
+              streamId: { type: "string" },
+              streamType: { type: "string", enum: ["channel", "thread"] },
+              filename: { type: "string" },
+              contentType: { type: "string" },
+              contentBase64: { type: "string" },
+              sha256: { type: "string" },
+            },
+          },
+        },
+        {
+          name: "knowledge.list",
+          description: "List scoped-knowledge entries derived from a stream",
+          input: {
+            type: "object",
+            required: ["streamId"],
+            properties: { streamId: { type: "string" } },
+          },
+        },
+        {
+          name: "knowledge.promote",
+          description: "Promote a knowledge entry org-wide (requires knowledge:promote grant)",
+          input: {
+            type: "object",
+            required: ["entryId"],
+            properties: {
+              entryId: { type: "string" },
+              summary: { type: "string" },
+            },
+          },
+        },
       ],
       onExecute: async ({ capability, arguments: args, agentSession }) => {
         const principal = await ensureUserPrincipal({
@@ -107,6 +157,39 @@ export const auth = betterAuth({
             parts: [{ type: "text", payload: { text } }],
           });
           return { ok: true };
+        }
+        if (capability === "artifacts.list") {
+          const streamId = String(args?.streamId ?? "");
+          return { artifacts: await listStreamArtifacts(principal, streamId) };
+        }
+        if (capability === "artifacts.upload") {
+          const streamId = String(args?.streamId ?? "");
+          const streamType =
+            args?.streamType === "thread" ? "thread" : "channel";
+          const filename = String(args?.filename ?? "");
+          const contentType = String(args?.contentType ?? "");
+          const contentBase64 = String(args?.contentBase64 ?? "");
+          const sha256 = typeof args?.sha256 === "string" ? args.sha256 : undefined;
+          const content = Buffer.from(contentBase64, "base64");
+          const artifact = await registerArtifact(principal, {
+            streamId,
+            streamType,
+            filename,
+            contentType,
+            content,
+            sha256,
+          });
+          return { artifact };
+        }
+        if (capability === "knowledge.list") {
+          const streamId = String(args?.streamId ?? "");
+          return { entries: await listKnowledge(principal, streamId) };
+        }
+        if (capability === "knowledge.promote") {
+          const entryId = String(args?.entryId ?? "");
+          const summary =
+            typeof args?.summary === "string" ? args.summary : undefined;
+          return { entry: await promoteKnowledge(principal, entryId, summary) };
         }
         return { ok: false };
       },

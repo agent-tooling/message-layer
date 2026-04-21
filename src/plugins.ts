@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import type { ServerConfig } from "./config.js";
 import type { EventBus } from "./event-bus.js";
 import type { MessageLayerService } from "./service.js";
+import { scopedKnowledgePlugin } from "./plugins/scoped-knowledge.js";
 import type { DomainEvent } from "./types.js";
 
 export type PluginLogger = (message: string) => unknown;
@@ -121,10 +122,10 @@ function eventLoggerPlugin(options?: Record<string, unknown>): ServerPlugin {
 }
 
 function inMemoryKnowledgePlugin(options?: Record<string, unknown>): ServerPlugin {
-  // A simple example plugin demonstrating the event subscription + route
-  // contract. Stores a derived per-stream text index in memory and exposes a
-  // read route. Only runs against events for channels the principal can
-  // already read, because the route delegates privacy to the core service.
+  // Kept for historical compatibility and for plugin-authoring tests; the
+  // production-grade equivalent is `scoped-knowledge`, which snapshots
+  // source visibility, persists across restarts, delegates privacy checks
+  // to the core service, and supports promotion via `knowledge.promoted`.
   const mountPath = typeof options?.mountPath === "string" ? options.mountPath : "/plugins/knowledge";
   const perStream = new Map<string, string[]>();
   let unsubscribe: (() => void) | undefined;
@@ -160,6 +161,7 @@ export const builtInPluginFactories: Record<string, PluginFactory> = {
   "api-key-header-auth": apiKeyHeaderAuthPlugin,
   "event-logger": eventLoggerPlugin,
   "in-memory-knowledge": inMemoryKnowledgePlugin,
+  "scoped-knowledge": scopedKnowledgePlugin,
 };
 
 export type PluginSpec = string | { name: string; options?: Record<string, unknown> };

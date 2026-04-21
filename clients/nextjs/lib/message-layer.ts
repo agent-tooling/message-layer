@@ -404,3 +404,98 @@ export async function resolvePermissionRequest(
     body: { approve, notes },
   });
 }
+
+// ── artifacts ──────────────────────────────────────────────────────────
+
+export type MlArtifactRecord = {
+  id: string;
+  orgId: string;
+  streamId: string;
+  streamType: "channel" | "thread";
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  storageKind: string;
+  createdByActorId: string;
+  createdAt: string;
+  deleted: boolean;
+};
+
+export async function registerArtifact(
+  principal: MlPrincipal,
+  input: {
+    streamId: string;
+    streamType: "channel" | "thread";
+    filename: string;
+    contentType: string;
+    content: Buffer;
+    sha256?: string;
+  },
+): Promise<MlArtifactRecord> {
+  const result = await mlRequest<{ artifact: MlArtifactRecord }>("/v1/artifacts", {
+    method: "POST",
+    principal,
+    body: {
+      streamId: input.streamId,
+      streamType: input.streamType,
+      filename: input.filename,
+      contentType: input.contentType,
+      contentBase64: input.content.toString("base64"),
+      sha256: input.sha256,
+    },
+  });
+  return result.artifact;
+}
+
+export async function listStreamArtifacts(
+  principal: MlPrincipal,
+  streamId: string,
+): Promise<MlArtifactRecord[]> {
+  const result = await mlRequest<{ artifacts: MlArtifactRecord[] }>(
+    `/v1/streams/${streamId}/artifacts`,
+    { principal },
+  );
+  return result.artifacts;
+}
+
+// ── knowledge (scoped-knowledge plugin) ────────────────────────────────
+
+export type MlKnowledgeEntry = {
+  id: string;
+  orgId: string;
+  sourceStreamId: string;
+  sourceStreamType: "channel" | "thread";
+  sourceMessageId: string;
+  sourceVisibility: "private" | "public";
+  createdByActorId: string;
+  text: string;
+  promoted: boolean;
+  promotedAt: string | null;
+  promotedByActorId: string | null;
+  promotionSummary: string | null;
+  createdAt: string;
+};
+
+export async function listKnowledge(
+  principal: MlPrincipal,
+  streamId: string,
+): Promise<MlKnowledgeEntry[]> {
+  const result = await mlRequest<{ entries: MlKnowledgeEntry[] }>(
+    `/v1/knowledge?streamId=${encodeURIComponent(streamId)}`,
+    { principal },
+  );
+  return result.entries;
+}
+
+export async function promoteKnowledge(
+  principal: MlPrincipal,
+  entryId: string,
+  summary?: string,
+): Promise<MlKnowledgeEntry> {
+  const result = await mlRequest<{ entry: MlKnowledgeEntry }>(
+    `/v1/knowledge/${entryId}/promote`,
+    { method: "POST", principal, body: { summary } },
+  );
+  return result.entry;
+}

@@ -25,11 +25,15 @@ A headless messaging and coordination layer for humans, agents, and apps.
 ```
 pnpm install
 pnpm run dev          # HTTP + WS on http://localhost:3000
-pnpm run test         # 73 tests across unit + e2e, no mocks
+pnpm run demo:hero    # narrated in-process end-to-end demo
+pnpm run test         # 95-test suite across unit + e2e, no mocks
 ```
 
 For local development setup, see [CONTRIBUTING.md](./CONTRIBUTING.md).
-Full API reference lives in [`docs/spec/`](./docs/spec/).
+Full API reference lives in [`docs/spec/`](./docs/spec/). The end-to-end
+developer story — human + agent + app in one channel, permission
+request, artifact upload, scoped knowledge, audit trail — is documented
+in [`docs/hero-flow.md`](./docs/hero-flow.md).
 
 ## HTTP (condensed)
 
@@ -59,6 +63,8 @@ Full API reference lives in [`docs/spec/`](./docs/spec/).
 | `POST` | `/v1/permission-requests` | Open a permission request |
 | `GET` | `/v1/permission-requests` | List open requests |
 | `POST` | `/v1/permission-requests/:id/resolve` | Approve or deny |
+| `GET` | `/v1/knowledge?streamId=…` | List derived knowledge entries (via `scoped-knowledge` plugin) |
+| `POST` | `/v1/knowledge/:id/promote` | Promote an entry org-wide (requires `knowledge:promote`) |
 | `POST` | `/v1/artifacts` | Register an artifact (base64 body, privacy-scoped) |
 | `GET` | `/v1/artifacts/:id` | Artifact metadata |
 | `GET` | `/v1/artifacts/:id/content` | Download artifact bytes |

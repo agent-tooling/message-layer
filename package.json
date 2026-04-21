@@ -12,6 +12,7 @@
     "test:watch": "vitest",
     "client:terminal": "tsx clients/terminal/client.ts",
     "client:terminal:demo": "tsx clients/terminal/client.ts --smoke",
+    "demo:hero": "tsx scripts/hero-flow.ts",
     "client:nextjs": "pnpm --dir clients/nextjs run dev",
     "client:nextjs:build": "pnpm --dir clients/nextjs run build"
   },

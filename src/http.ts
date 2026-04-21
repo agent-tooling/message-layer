@@ -487,11 +487,15 @@ export function createApp(service: MessageLayerService): Hono {
     if ("response" in auth) return auth.response;
     try {
       const { metadata, content } = await service.downloadArtifact(auth.principal, c.req.param("artifactId"));
+      // Let the HTTP server compute `Content-Length` from the body so we
+      // don't duplicate it when running behind `@hono/node-server`. The
+      // sidecar headers carry the size + digest for clients that want to
+      // verify without parsing the body.
       const headers = new Headers({
         "content-type": metadata.contentType,
-        "content-length": String(metadata.size),
         "content-disposition": `attachment; filename="${encodeFilename(metadata.filename)}"`,
         "x-artifact-id": metadata.id,
+        "x-artifact-size": String(metadata.size),
         "x-artifact-sha256": metadata.sha256,
       });
       return new Response(new Uint8Array(content), { status: 200, headers });

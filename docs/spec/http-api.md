@@ -332,6 +332,57 @@ are the recommended way to attach files to conversations; messages stay
 small and bytes stay behind the permissioned `GET /v1/artifacts/:id/content`
 endpoint.
 
+## Knowledge (provided by the `scoped-knowledge` plugin)
+
+The `scoped-knowledge` plugin ships in `src/plugins/scoped-knowledge.ts`
+and enables three routes when added to `config.plugins`. Entries are
+derived from `message.appended` events; the source stream's visibility is
+snapshotted at insertion so derived data can never widen retroactively.
+Plugins that implement similar features SHOULD follow the same contract.
+
+### `GET /v1/knowledge?streamId=...`
+
+List derived entries attached to a stream. Requires read access to the
+source stream (privacy delegated to the core service).
+
+**Query**
+| Param                         | Type    | Default | Description |
+|-------------------------------|---------|---------|-------------|
+| streamId                      | string  | —       | Required unless `includePromotedElsewhere=true`. |
+| includePromotedElsewhere      | boolean | `false` | When `true` (without `streamId`), returns all org-promoted entries. |
+
+**Response** `200` — `{ "entries": KnowledgeEntry[] }`
+
+### `GET /v1/knowledge/:entryId`
+
+Fetch a single entry. Non-promoted entries require read access to the
+source stream; promoted entries are readable by any org member.
+
+### `POST /v1/knowledge/:entryId/promote`
+
+Promote an entry org-wide. Requires `knowledge:promote` (scope or grant
+on the org). Calls `MessageLayer.recordKnowledgePromotion`, which emits
+`knowledge.promoted` on the shared bus and into the audit log; the
+plugin listens and flips its local `promoted` bit in response.
+
+**Request**
+| Field    | Type   | Required | Description |
+|----------|--------|----------|-------------|
+| summary  | string | no       | Free-form annotation recorded with the promotion event. |
+
+**Response** `200` — `{ "entry": KnowledgeEntry }`
+
+`KnowledgeEntry` shape:
+```json
+{
+  "id": "...", "orgId": "...", "sourceStreamId": "...", "sourceStreamType": "channel",
+  "sourceMessageId": "...", "sourceVisibility": "private|public",
+  "createdByActorId": "...", "text": "...",
+  "promoted": true, "promotedAt": "...", "promotedByActorId": "...",
+  "promotionSummary": "...", "createdAt": "..."
+}
+```
+
 ## Clients
 
 ### `POST /v1/clients`

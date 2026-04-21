@@ -373,6 +373,40 @@ export class MessageLayer {
     }
   }
 
+  /**
+   * Public privacy check delegated to by plugins. Plugins that derive data
+   * from messages (memory, knowledge, search) call this on their read paths
+   * to guarantee the AGENTS.md rule that derived data is never more visible
+   * than its source unless explicitly promoted.
+   */
+  async assertCanReadStream(principal: Principal, streamId: string, streamType?: StreamType): Promise<void> {
+    const resolved = streamType ?? (await this.inferStreamType(streamId));
+    await this.assertOrgActor(principal);
+    await this.assertStreamReadable(principal, streamId, resolved);
+  }
+
+  /**
+   * Resolve the org + visibility of a stream without leaking information to
+   * principals that cannot see it. Used by plugins that need to snapshot
+   * source scope when recording derived data.
+   */
+  async describeStream(
+    principal: Principal,
+    streamId: string,
+    streamType?: StreamType,
+  ): Promise<{ orgId: string; streamType: StreamType; visibility: Visibility; channelId: string }> {
+    const resolved = streamType ?? (await this.inferStreamType(streamId));
+    await this.assertCanReadStream(principal, streamId, resolved);
+    const info = await this.resolveStreamChannel(streamId, resolved);
+    if (!info) throw new NotFoundError(`${resolved} not found: ${streamId}`);
+    return {
+      orgId: info.orgId,
+      streamType: resolved,
+      visibility: info.visibility,
+      channelId: info.channelId,
+    };
+  }
+
   // ── orgs / actors ────────────────────────────────────────────────────────
 
   async createOrg(name: string): Promise<string> {
@@ -1383,6 +1417,69 @@ export class MessageLayer {
 
   private artifactStorageKey(row: ArtifactRecord): string {
     return deriveStorageKey(row.orgId, row.id);
+  }
+
+  // ── knowledge (plugin hooks) ─────────────────────────────────────────────
+
+  /**
+   * Record that a plugin has promoted a derived knowledge entry beyond the
+   * scope of its source. Plugins own their own storage; this hook exists
+   * solely so the event lands in the core bus + per-org hash-chained audit
+   * log (AGENTS.md rule #12 "core emits events, plugins consume").
+   *
+   * The caller must already be authorized to read the source stream and
+   * must hold `knowledge:promote` (scope or org-level grant). The actual
+   * visibility change happens inside the plugin, driven by the emitted
+   * `knowledge.promoted` event.
+   */
+  async recordKnowledgePromotion(
+    principal: Principal,
+    input: {
+      entryId: string;
+      sourceStreamId: string;
+      sourceStreamType: StreamType;
+      summary?: string;
+    },
+  ): Promise<DomainEvent> {
+    await this.assertOrgActor(principal);
+    if (!input.entryId) throw new ValidationError("entryId is required");
+    if (!input.sourceStreamId) throw new ValidationError("sourceStreamId is required");
+    streamTypeSchema.parse(input.sourceStreamType);
+
+    // The promoter must be able to see the source in the first place; we do
+    // not allow someone who can't read a channel to cause its derived data
+    // to be reclassified.
+    await this.assertStreamReadable(principal, input.sourceStreamId, input.sourceStreamType);
+
+    if (
+      !principal.scopes.includes("knowledge:promote") &&
+      !(await this.hasGrant(principal, "knowledge:promote", "org", principal.orgId))
+    ) {
+      throw new PermissionError("missing knowledge:promote", {
+        capability: "knowledge:promote",
+        resourceType: "org",
+        resourceId: principal.orgId,
+      });
+    }
+
+    const event = await this.db.tx(async (tx) =>
+      this.emit(tx, {
+        orgId: principal.orgId,
+        streamId: input.sourceStreamId,
+        eventType: "knowledge.promoted",
+        payload: {
+          orgId: principal.orgId,
+          entryId: input.entryId,
+          sourceStreamId: input.sourceStreamId,
+          sourceStreamType: input.sourceStreamType,
+          promotedByActorId: principal.actorId,
+          summary: input.summary ?? null,
+          promotedAt: this.ts(),
+        },
+      }),
+    );
+    this.bus.publish(event);
+    return event;
   }
 
   // ── audit ────────────────────────────────────────────────────────────────
