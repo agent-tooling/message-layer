@@ -13,6 +13,40 @@ export const messagePartTypes = [
   "artifact",
   "approval_request",
   "approval_response",
+  /**
+   * Generative UI part.  The payload carries a `spec` (json-render flat-spec
+   * with `root` + `elements`), an optional `catalog` hint (e.g. `"shadcn"`),
+   * and an optional `version` string for schema migrations.
+   *
+   * Agents post `ui` parts; the Next.js client renders them via the shadcn
+   * component registry defined in `clients/nextjs/components/genui/`.
+   *
+   * @example
+   * ```json
+   * {
+   *   "type": "ui",
+   *   "payload": {
+   *     "catalog": "shadcn",
+   *     "spec": {
+   *       "root": "card-1",
+   *       "elements": {
+   *         "card-1": {
+   *           "type": "Card",
+   *           "props": { "title": "Launch metrics" },
+   *           "children": ["metric-1"]
+   *         },
+   *         "metric-1": {
+   *           "type": "Metric",
+   *           "props": { "label": "PRs merged", "value": "42" },
+   *           "children": []
+   *         }
+   *       }
+   *     }
+   *   }
+   * }
+   * ```
+   */
+  "ui",
 ] as const;
 
 export const messagePartTypeSchema = z.enum(messagePartTypes);

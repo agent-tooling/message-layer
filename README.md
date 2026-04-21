@@ -330,6 +330,37 @@ Append-only named streams with optional TTL, consumer checkpoints, and tail-read
 - Adds `POST /v1/durable-streams/:id/close` — close stream
 
 #### `durable-streams-storage`
+#### `genui` — Generative UI message parts
+
+Agents post `ui` message parts containing a [json-render](https://github.com/vercel-labs/json-render) spec. The spec describes a UI tree (components + props + children); the Next.js client renders it using a curated registry of shadcn-style components.
+
+**Core (message-layer server)** — zero new routes required. The `ui` type is a first-class member of `messagePartTypes`:
+
+```json
+{
+  "type": "ui",
+  "payload": {
+    "catalog": "shadcn",
+    "spec": {
+      "root": "card-1",
+      "elements": {
+        "card-1": { "type": "Card", "props": { "title": "Sprint metrics" }, "children": ["m1"] },
+        "m1":     { "type": "Metric", "props": { "label": "PRs merged", "value": "17", "trend": "up" }, "children": [] }
+      }
+    }
+  }
+}
+```
+
+**Catalog** — 16 components, inspired by shadcn/ui, rendered with Tailwind CSS:
+
+`Stack`, `Card`, `Separator` · `Heading`, `Text` · `Badge`, `Alert`, `Metric`, `Progress` · `Table`, `TableRow`, `TableCell` · `Button` · `Input`, `Checkbox` · `List`, `ListItem` · `Code`
+
+**Client** — `GenuiPartView` renders any `ui` part inside `MessageCard`. The component lives at `clients/nextjs/components/genui/`.
+
+**Demo** — visit `http://localhost:3001/genui-demo` (no auth required) to see every component live.
+
+
 Storage-backed variant of `durable-streams`. Chunk data is written to the blob `StorageAdapter` (memory / local-fs / **S3**) rather than SQL rows, keeping the DB lean for large payloads (streaming LLM output, log tails, binary frames, etc.).
 
 Uses the same storage adapter that backs artifacts — configure S3 for artifacts and durable-streams-storage automatically uses S3.

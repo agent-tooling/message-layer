@@ -68,6 +68,7 @@ src/
     scoped-knowledge.ts
     webhooks.ts
     durable-streams.ts
+    durable-streams-storage.ts
   config.ts             Env → ServerConfig parsing
   server-runtime.ts     startServer() — composes DB, service, HTTP, WS, plugins
   server.ts             CLI entry point
@@ -82,6 +83,8 @@ tests/
 clients/
   terminal/             Interactive REPL and smoke-test runner
   nextjs/               Full web client (Better Auth, invites, attachments, approval inbox)
+    components/genui/   Generative UI renderer — catalog, registry, GenuiPartView
+    app/genui-demo/     Standalone demo page (no auth) at /genui-demo
 
 agents/
   poet/                 Example Pi poet agent

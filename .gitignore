@@ -6,3 +6,4 @@ coverage
 agents/**/.data/
 # reference repos (sparse clones, not tracked)
 references/electric/
+references/json-render/

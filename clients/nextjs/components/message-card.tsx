@@ -1,5 +1,7 @@
 "use client";
 
+import { GenuiPartView } from "@/components/genui/genui-part-view";
+
 type MessagePart = { type: string; payload: Record<string, unknown> };
 
 type Message = {
@@ -233,6 +235,10 @@ function MessagePartView({ part }: { part: MessagePart }) {
         <span className="ml-2 text-zinc-400">id: {String(part.payload.requestId ?? "")}</span>
       </div>
     );
+  }
+
+  if (part.type === "ui") {
+    return <GenuiPartView payload={part.payload} />;
   }
 
   if (part.type === "artifact") {
