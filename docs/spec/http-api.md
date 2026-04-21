@@ -384,6 +384,104 @@ plugin listens and flips its local `promoted` bit in response.
 }
 ```
 
+## Durable Streams (provided by the `durable-streams` plugin)
+
+The `durable-streams` plugin adds an append/read/commit primitive for
+progressive agent output. This is useful when agents emit token deltas or
+long-running progress updates and callers need resumable reads before the
+final message is committed into a channel/thread.
+
+### `POST /v1/durable-streams`
+
+Create a durable stream owned by the principal.
+
+**Request**
+| Field            | Type                      | Required | Description |
+|------------------|---------------------------|----------|-------------|
+| targetStreamId   | string                    | no       | Channel/thread id to commit into later. |
+| targetStreamType | `"channel"` \| `"thread"` | no       | Must be provided with `targetStreamId`. |
+| contentType      | string                    | no       | Defaults to `text/plain; charset=utf-8`. |
+| metadata         | object                    | no       | Opaque context for callers. |
+
+**Response** `200` — `{ "durableStreamId": "...", "status": "open", "offset": 0 }`
+
+### `POST /v1/durable-streams/:streamId/chunks`
+
+Append one or more text chunks in-order.
+
+**Request**
+| Field  | Type                      | Required | Description |
+|--------|---------------------------|----------|-------------|
+| chunks | `Array<{ text: string }>` | yes      | Appended atomically in order. |
+
+**Response** `200` — `{ "durableStreamId": "...", "appended": 2, "offset": 2 }`
+
+### `GET /v1/durable-streams/:streamId/read`
+
+Read chunks after an offset. Supports catch-up and long-poll style live mode.
+
+**Query**
+| Param     | Type    | Default | Description |
+|-----------|---------|---------|-------------|
+| offset    | number  | `0`     | Return chunks with `chunk_offset > offset`. |
+| limit     | number  | `200`   | Max chunks per response (bounded server-side). |
+| live      | boolean | `false` | When `true`, waits for new chunks while stream is open. |
+| timeoutMs | number  | plugin default | Max long-poll wait when `live=true`. |
+
+**Response** `200`
+```json
+{
+  "durableStreamId": "...",
+  "status": "open",
+  "fromOffset": 0,
+  "nextOffset": 2,
+  "upToDate": true,
+  "chunks": [
+    { "offset": 1, "text": "Hello ", "createdAt": "..." },
+    { "offset": 2, "text": "world", "createdAt": "..." }
+  ]
+}
+```
+
+### `GET /v1/durable-streams/:streamId/tail`
+
+SSE tail (`text/event-stream`) for live chunk delivery.
+
+Events:
+- `ready` — initial cursor info
+- `chunks` — new chunk batch
+- `eof` — stream closed/committed
+- `error` — stream-level error
+
+### `POST /v1/durable-streams/:streamId/close`
+
+Close the stream and persist a backup payload to the configured artifact
+storage adapter.
+
+**Response** `200` — `{ "durableStreamId": "...", "status": "closed", "backupKey": "...", "offset": N }`
+
+### `POST /v1/durable-streams/:streamId/commit`
+
+Concatenate all chunks and append a final text message to the configured
+target stream (`targetStreamId` / `targetStreamType`), then mark stream as
+`committed`.
+
+**Request**
+| Field          | Type   | Required | Description |
+|----------------|--------|----------|-------------|
+| idempotencyKey | string | no       | Optional override for commit idempotency key. |
+
+**Response** `200`
+```json
+{
+  "durableStreamId": "...",
+  "status": "committed",
+  "committedMessageId": "...",
+  "backupKey": "...",
+  "streamSeq": 42
+}
+```
+
 ## Clients
 
 ### `POST /v1/clients`

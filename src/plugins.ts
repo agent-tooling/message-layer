@@ -5,6 +5,7 @@ import type { EventBus } from "./event-bus.js";
 import type { MessageLayerService } from "./service.js";
 import { scopedKnowledgePlugin } from "./plugins/scoped-knowledge.js";
 import { webhookPlugin } from "./plugins/webhooks.js";
+import { durableStreamsPlugin } from "./plugins/durable-streams.js";
 import type { DomainEvent } from "./types.js";
 
 export type PluginLogger = (message: string) => unknown;
@@ -172,6 +173,7 @@ export const builtInPluginFactories: Record<string, PluginFactory> = {
   "in-memory-knowledge": inMemoryKnowledgePlugin,
   "scoped-knowledge": scopedKnowledgePlugin,
   webhooks: webhookPlugin,
+  "durable-streams": durableStreamsPlugin,
 };
 
 export type PluginSpec = string | { name: string; options?: Record<string, unknown> };
