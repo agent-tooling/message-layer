@@ -72,6 +72,7 @@ async function run(): Promise<void> {
 
   const { principal } = await bootstrapAgent({
     baseUrl: BASE_URL,
+    appUrl: HEALTH_URL,
     orgId: ORG_ID,
     displayName: "assistant-agent",
   });

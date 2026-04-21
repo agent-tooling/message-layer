@@ -4,11 +4,20 @@ import { MessageLayerClient, type Principal } from "./ml.js";
 
 const STATE_DIR = resolve(".data");
 const STATE_FILE = resolve(STATE_DIR, "assistant-state.json");
+const JOIN_REQUEST_FILE = resolve(STATE_DIR, "assistant-join-request.json");
 
 type AssistantState = {
   orgId: string;
   actorId: string;
   provider: string;
+  createdAt: string;
+};
+
+type JoinRequestState = {
+  requestId: string;
+  requestSecret: string;
+  orgId: string;
+  displayName: string;
   createdAt: string;
 };
 
@@ -26,6 +35,20 @@ function saveState(state: AssistantState): void {
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
+function loadJoinRequestState(): JoinRequestState | null {
+  if (!existsSync(JOIN_REQUEST_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(JOIN_REQUEST_FILE, "utf8")) as JoinRequestState;
+  } catch {
+    return null;
+  }
+}
+
+function saveJoinRequestState(state: JoinRequestState): void {
+  mkdirSync(dirname(JOIN_REQUEST_FILE), { recursive: true });
+  writeFileSync(JOIN_REQUEST_FILE, JSON.stringify(state, null, 2));
+}
+
 async function actorIsLive(client: MessageLayerClient, principal: Principal): Promise<boolean> {
   try {
     await client.withPrincipal(principal).listChannels();
@@ -39,6 +62,7 @@ async function actorIsLive(client: MessageLayerClient, principal: Principal): Pr
 
 export async function bootstrapAgent(opts: {
   baseUrl: string;
+  appUrl: string;
   orgId: string;
   displayName: string;
 }): Promise<{ principal: Principal; client: MessageLayerClient; reused: boolean }> {
@@ -56,19 +80,64 @@ export async function bootstrapAgent(opts: {
       return { principal, client, reused: true };
     }
   }
+  const appOrigin = new URL(opts.appUrl).origin;
+  const join = loadJoinRequestState();
+  if (join && join.orgId === opts.orgId) {
+    const poll = await fetch(
+      `${appOrigin}/api/team/agents/join-requests/${join.requestId}?secret=${encodeURIComponent(join.requestSecret)}`,
+      { cache: "no-store" },
+    );
+    const status = (await poll.json()) as {
+      status?: "open" | "approved" | "denied";
+      actorId?: string | null;
+      note?: string | null;
+    };
+    if (status.status === "approved" && status.actorId) {
+      const principal: Principal = {
+        actorId: status.actorId,
+        orgId: opts.orgId,
+        scopes: [],
+        provider: "assistant-agent",
+      };
+      saveState({
+        orgId: opts.orgId,
+        actorId: principal.actorId,
+        provider: principal.provider,
+        createdAt: new Date().toISOString(),
+      });
+      return { principal, client, reused: false };
+    }
+    if (status.status === "denied") {
+      throw new Error(
+        `agent join request ${join.requestId} was denied${status.note ? `: ${status.note}` : ""}.`,
+      );
+    }
+    throw new Error(
+      `agent join request ${join.requestId} is pending admin approval. Resolve it in /admin/agents, then restart the assistant.`,
+    );
+  }
 
-  const actorId = await client.createActor(opts.orgId, "agent", opts.displayName);
-  const principal: Principal = {
-    actorId,
-    orgId: opts.orgId,
-    scopes: [],
-    provider: "assistant-agent",
+  const request = await fetch(`${appOrigin}/api/team/agents/join-requests`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName: opts.displayName, orgId: opts.orgId }),
+  });
+  const payload = (await request.json()) as {
+    requestId?: string;
+    requestSecret?: string;
+    error?: string;
   };
-  saveState({
+  if (!request.ok || !payload.requestId || !payload.requestSecret) {
+    throw new Error(payload.error ?? `failed to create agent join request (${request.status})`);
+  }
+  saveJoinRequestState({
+    requestId: payload.requestId,
+    requestSecret: payload.requestSecret,
     orgId: opts.orgId,
-    actorId,
-    provider: principal.provider,
+    displayName: opts.displayName,
     createdAt: new Date().toISOString(),
   });
-  return { principal, client, reused: false };
+  throw new Error(
+    `agent join request ${payload.requestId} submitted. Approve it in /admin/agents, then restart the assistant.`,
+  );
 }

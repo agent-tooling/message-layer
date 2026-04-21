@@ -30,6 +30,7 @@ type PermissionRequest = {
   action: string;
   resourceType: string;
   resourceId: string | null;
+  context?: Record<string, unknown>;
   createdAt: string;
 };
 type WebhookSubscription = {
@@ -56,6 +57,7 @@ export function TeamWorkspace() {
   const [threadsByChannel, setThreadsByChannel] = useState<Record<string, Thread[]>>({});
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<PermissionRequest[]>([]);
+  const [canResolveApprovals, setCanResolveApprovals] = useState(false);
   const [pendingUpload, setPendingUpload] = useState<Attachment[]>([]);
   const [currentActorId, setCurrentActorId] = useState<string | null>(null);
   const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([]);
@@ -107,6 +109,45 @@ export function TeamWorkspace() {
   }, [actors]);
 
   const agents = useMemo(() => actors.filter((actor) => actor.actorType === "agent"), [actors]);
+  const humanMembers = useMemo(
+    () => members.filter((member) => member.actorType === "human"),
+    [members],
+  );
+
+  function requestContextDetails(request: PermissionRequest): string[] {
+    const context = request.context ?? {};
+    const details: string[] = [];
+    const channelName = context.requestedName;
+    const channelVisibility = context.requestedVisibility;
+    if (typeof channelName === "string" && channelName.length > 0) {
+      details.push(`channel: #${channelName}`);
+    }
+    if (typeof channelVisibility === "string" && channelVisibility.length > 0) {
+      details.push(`visibility: ${channelVisibility}`);
+    }
+    const streamType = context.streamType;
+    const streamId = context.streamId;
+    if (typeof streamType === "string" && typeof streamId === "string") {
+      details.push(`${streamType}: ${streamId}`);
+    }
+    const parts = context.parts;
+    if (Array.isArray(parts) && parts.length > 0) {
+      const textPreview = parts
+        .map((part) => {
+          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+            return String((part as { text: string }).text);
+          }
+          return null;
+        })
+        .filter((value): value is string => value !== null)
+        .join(" ");
+      if (textPreview.length > 0) {
+        const trimmed = textPreview.length > 160 ? `${textPreview.slice(0, 160)}…` : textPreview;
+        details.push(`message preview: "${trimmed}"`);
+      }
+    }
+    return details;
+  }
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(path, { ...init, cache: "no-store" });
@@ -133,8 +174,11 @@ export function TeamWorkspace() {
   }
 
   async function refreshApprovals() {
-    const result = await api<{ requests: PermissionRequest[] }>("/api/team/permission-requests");
+    const result = await api<{ requests: PermissionRequest[]; canResolve?: boolean }>(
+      "/api/team/permission-requests",
+    );
     setApprovals(result.requests);
+    setCanResolveApprovals(result.canResolve === true);
   }
 
   async function refreshMessages(channelId: string) {
@@ -277,14 +321,44 @@ export function TeamWorkspace() {
     const name = newChannelName.trim();
     if (!name) return;
     try {
-      const result = await api<{ channelId: string }>("/api/team/channels", {
+      const response = await fetch("/api/team/channels", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ name }),
+        cache: "no-store",
       });
+      const payload = (await response.json()) as {
+        channelId?: string;
+        permissionRequestId?: string;
+        error?: string;
+      };
+      if (!response.ok) {
+        if (payload.permissionRequestId) {
+          throw new Error(
+            `Channel request submitted for admin approval (${payload.permissionRequestId}).`,
+          );
+        }
+        throw new Error(payload.error ?? `request failed: ${response.status}`);
+      }
+      if (!payload.channelId) {
+        throw new Error("channel creation did not return a channel id");
+      }
       setNewChannelName("");
       await refreshDirectory();
-      setActiveChannelId(result.channelId);
+      setActiveChannelId(payload.channelId);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function resolveApproval(requestId: string, approve: boolean) {
+    try {
+      await api(`/api/team/permission-requests/${requestId}/resolve`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ approve, notes: approve ? "approved via UI" : "denied via UI" }),
+      });
+      setApprovals((prev) => prev.filter((request) => request.requestId !== requestId));
     } catch (err) {
       setError((err as Error).message);
     }
@@ -316,19 +390,6 @@ export function TeamWorkspace() {
 
   function closeThread() {
     setActiveThreadId(null);
-  }
-
-  async function resolveApproval(requestId: string, approve: boolean) {
-    try {
-      await api(`/api/team/permission-requests/${requestId}/resolve`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ approve, notes: approve ? "approved via UI" : "denied via UI" }),
-      });
-      setApprovals((prev) => prev.filter((request) => request.requestId !== requestId));
-    } catch (err) {
-      setError((err as Error).message);
-    }
   }
 
   function copyInviteLink() {
@@ -383,9 +444,7 @@ export function TeamWorkspace() {
         <div className="mt-6 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3">
           <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">People</h3>
           <ul className="mt-2 space-y-1.5 text-sm text-zinc-300">
-            {members
-              .filter((member) => member.actorType !== "agent")
-              .map((member) => (
+            {humanMembers.map((member) => (
                 <li key={member.actorId} className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <span className="block truncate">{member.displayName}</span>
@@ -420,7 +479,7 @@ export function TeamWorkspace() {
                   ) : null}
                 </li>
               ))}
-            {members.filter((member) => member.actorType !== "agent").length === 0 ? (
+            {humanMembers.length === 0 ? (
               <li className="text-xs text-zinc-500">No members yet.</li>
             ) : null}
           </ul>
@@ -526,7 +585,7 @@ export function TeamWorkspace() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {approvals.length > 0 ? (
+            {canResolveApprovals && approvals.length > 0 ? (
               <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-300">
                 {approvals.length} approval{approvals.length === 1 ? "" : "s"} pending
               </span>
@@ -541,15 +600,16 @@ export function TeamWorkspace() {
           </div>
         </header>
 
-        {approvals.length > 0 ? (
+        {canResolveApprovals && approvals.length > 0 ? (
           <div className="border-b border-amber-500/10 bg-amber-500/[0.03] px-6 py-3">
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-amber-300">
-              Agent approval requests
+              Pending approval requests
             </p>
             <ul className="space-y-2">
               {approvals.map((request) => {
                 const actor = actorsById[request.actorId];
                 const capability = request.action.replace(/^tool:execute:/, "");
+                const detailLines = requestContextDetails(request);
                 return (
                   <li
                     key={request.requestId}
@@ -565,6 +625,11 @@ export function TeamWorkspace() {
                         {request.resourceType}
                         {request.resourceId ? ` · ${request.resourceId}` : ""}
                       </div>
+                      {detailLines.map((detail) => (
+                        <div key={`${request.requestId}-${detail}`} className="mt-0.5 truncate text-[11px] text-zinc-400">
+                          {detail}
+                        </div>
+                      ))}
                     </div>
                     <div className="flex gap-2">
                       <button

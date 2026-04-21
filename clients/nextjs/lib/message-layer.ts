@@ -558,6 +558,28 @@ export async function createChannel(principal: MlPrincipal, name: string): Promi
   return result.channelId;
 }
 
+export async function createPermissionRequest(
+  principal: MlPrincipal,
+  input: {
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    context?: Record<string, unknown>;
+  },
+): Promise<string> {
+  const result = await mlRequest<{ requestId: string }>("/v1/permission-requests", {
+    method: "POST",
+    principal,
+    body: {
+      action: input.action,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      context: input.context ?? {},
+    },
+  });
+  return result.requestId;
+}
+
 export async function listThreads(
   principal: MlPrincipal,
   channelId: string,

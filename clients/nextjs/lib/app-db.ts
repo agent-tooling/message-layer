@@ -60,6 +60,19 @@ CREATE TABLE IF NOT EXISTS attachments (
   disk_path TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS agent_join_requests (
+  id TEXT PRIMARY KEY,
+  request_secret TEXT NOT NULL UNIQUE,
+  org_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('open', 'approved', 'denied')),
+  actor_id TEXT,
+  note TEXT,
+  resolved_by_user_id TEXT,
+  created_at TEXT NOT NULL,
+  resolved_at TEXT
+);
 `);
 
 export type UserActorRow = {
@@ -83,6 +96,20 @@ export type AttachmentRow = {
   size_bytes: number;
   disk_path: string;
   created_at: string;
+};
+
+export type AgentJoinRequestStatus = "open" | "approved" | "denied";
+export type AgentJoinRequestRow = {
+  id: string;
+  request_secret: string;
+  org_id: string;
+  display_name: string;
+  status: AgentJoinRequestStatus;
+  actor_id: string | null;
+  note: string | null;
+  resolved_by_user_id: string | null;
+  created_at: string;
+  resolved_at: string | null;
 };
 
 export function getSetting(key: string): string | null {
@@ -202,6 +229,86 @@ export function hasConsumedInvite(userId: string): boolean {
     .prepare("SELECT 1 FROM invites WHERE consumed_by_user_id=? LIMIT 1")
     .get(userId) as { 1: number } | undefined;
   return Boolean(row);
+}
+
+export function createAgentJoinRequest(input: {
+  id: string;
+  requestSecret: string;
+  orgId: string;
+  displayName: string;
+  createdAt: string;
+}): void {
+  sqlite
+    .prepare(
+      `INSERT INTO agent_join_requests(
+         id,request_secret,org_id,display_name,status,created_at
+       ) VALUES (?,?,?,?, 'open', ?)`,
+    )
+    .run(input.id, input.requestSecret, input.orgId, input.displayName, input.createdAt);
+}
+
+export function getAgentJoinRequestBySecret(
+  id: string,
+  requestSecret: string,
+): AgentJoinRequestRow | null {
+  const row = sqlite
+    .prepare(
+      `SELECT id,request_secret,org_id,display_name,status,actor_id,note,resolved_by_user_id,created_at,resolved_at
+       FROM agent_join_requests
+       WHERE id=? AND request_secret=?`,
+    )
+    .get(id, requestSecret);
+  return (row as AgentJoinRequestRow | undefined) ?? null;
+}
+
+export function getAgentJoinRequestById(id: string): AgentJoinRequestRow | null {
+  const row = sqlite
+    .prepare(
+      `SELECT id,request_secret,org_id,display_name,status,actor_id,note,resolved_by_user_id,created_at,resolved_at
+       FROM agent_join_requests
+       WHERE id=?`,
+    )
+    .get(id);
+  return (row as AgentJoinRequestRow | undefined) ?? null;
+}
+
+export function listOpenAgentJoinRequests(orgId: string): AgentJoinRequestRow[] {
+  const rows = sqlite
+    .prepare(
+      `SELECT id,request_secret,org_id,display_name,status,actor_id,note,resolved_by_user_id,created_at,resolved_at
+       FROM agent_join_requests
+       WHERE org_id=? AND status='open'
+       ORDER BY created_at ASC`,
+    )
+    .all(orgId);
+  return rows as AgentJoinRequestRow[];
+}
+
+export function resolveAgentJoinRequest(input: {
+  id: string;
+  status: "approved" | "denied";
+  actorId: string | null;
+  note: string;
+  resolvedByUserId: string;
+}): void {
+  sqlite
+    .prepare(
+      `UPDATE agent_join_requests
+       SET status=?,
+           actor_id=?,
+           note=?,
+           resolved_by_user_id=?,
+           resolved_at=?
+       WHERE id=? AND status='open'`,
+    )
+    .run(
+      input.status,
+      input.actorId,
+      input.note,
+      input.resolvedByUserId,
+      new Date().toISOString(),
+      input.id,
+    );
 }
 
 export { sqlite };

@@ -97,6 +97,7 @@ async function main(): Promise<void> {
 
   const { principal, reused } = await bootstrapAgent({
     baseUrl: BASE_URL,
+    appUrl: HEALTH_URL,
     orgId: ORG_ID,
     displayName: "poet-agent",
   });

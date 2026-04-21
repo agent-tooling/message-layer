@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createChannel, getDefaultChannelId, listChannels } from "@/lib/message-layer";
+import { createChannel, createPermissionRequest, getDefaultChannelId, listChannels } from "@/lib/message-layer";
 import { requirePrincipal } from "@/lib/server-auth";
 
 export async function GET(request: Request) {
@@ -21,8 +21,34 @@ export async function POST(request: Request) {
     if (!name) {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
-    const channelId = await createChannel(principal, name);
-    return NextResponse.json({ channelId });
+    try {
+      const channelId = await createChannel(principal, name);
+      return NextResponse.json({ channelId });
+    } catch (error) {
+      const message = (error as Error).message;
+      if (!message.includes("missing channel:create")) {
+        throw error;
+      }
+      const requestId = await createPermissionRequest(principal, {
+        action: "channel:create",
+        resourceType: "org",
+        resourceId: principal.orgId,
+        context: {
+          kind: "channel.create",
+          requestedName: name,
+          requestedVisibility: "public",
+          requestedByActorId: principal.actorId,
+        },
+      });
+      return NextResponse.json(
+        {
+          error: "channel creation requires admin approval",
+          permissionRequestId: requestId,
+          capability: "channel:create",
+        },
+        { status: 403 },
+      );
+    }
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 400 });
   }

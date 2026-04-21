@@ -4,11 +4,20 @@ import { MessageLayerClient, type Principal } from "./ml.js";
 
 const STATE_DIR = resolve(".data");
 const STATE_FILE = resolve(STATE_DIR, "poet-state.json");
+const JOIN_REQUEST_FILE = resolve(STATE_DIR, "poet-join-request.json");
 
 type PoetState = {
   orgId: string;
   actorId: string;
   provider: string;
+  createdAt: string;
+};
+
+type JoinRequestState = {
+  requestId: string;
+  requestSecret: string;
+  orgId: string;
+  displayName: string;
   createdAt: string;
 };
 
@@ -24,6 +33,20 @@ function loadState(): PoetState | null {
 function saveState(state: PoetState): void {
   mkdirSync(dirname(STATE_FILE), { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function loadJoinRequestState(): JoinRequestState | null {
+  if (!existsSync(JOIN_REQUEST_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(JOIN_REQUEST_FILE, "utf8")) as JoinRequestState;
+  } catch {
+    return null;
+  }
+}
+
+function saveJoinRequestState(state: JoinRequestState): void {
+  mkdirSync(dirname(JOIN_REQUEST_FILE), { recursive: true });
+  writeFileSync(JOIN_REQUEST_FILE, JSON.stringify(state, null, 2));
 }
 
 /**
@@ -71,6 +94,7 @@ export type BootstrapResult = {
  */
 export async function bootstrapAgent(opts: {
   baseUrl: string;
+  appUrl: string;
   orgId: string;
   displayName: string;
 }): Promise<BootstrapResult> {
@@ -94,20 +118,59 @@ export async function bootstrapAgent(opts: {
       return { principal, client, reused: true };
     }
   }
-
-  let actorId: string;
-  try {
-    actorId = await client.createActor(opts.orgId, "agent", opts.displayName);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (/org not found/i.test(message)) {
+  const appOrigin = new URL(opts.appUrl).origin;
+  const join = loadJoinRequestState();
+  if (join && join.orgId === opts.orgId) {
+    const poll = await fetch(
+      `${appOrigin}/api/team/agents/join-requests/${join.requestId}?secret=${encodeURIComponent(join.requestSecret)}`,
+      { cache: "no-store" },
+    );
+    const status = (await poll.json()) as {
+      status?: "open" | "approved" | "denied";
+      actorId?: string | null;
+      note?: string | null;
+    };
+    if (status.status === "approved" && status.actorId) {
+      const principal: Principal = {
+        actorId: status.actorId,
+        orgId: opts.orgId,
+        scopes: [],
+        provider: "poet-agent",
+      };
+      saveState({ orgId: opts.orgId, actorId: principal.actorId, provider: principal.provider, createdAt: new Date().toISOString() });
+      return { principal, client, reused: false };
+    }
+    if (status.status === "denied") {
       throw new Error(
-        `org ${opts.orgId} not found on ${opts.baseUrl}. Did the core server restart? It runs PGlite in-memory by default, so its org catalog is reset on every boot. Open the Next.js app so it recreates the org, then re-run the poet with the fresh --org-id.`,
+        `agent join request ${join.requestId} was denied${status.note ? `: ${status.note}` : ""}.`,
       );
     }
-    throw error;
+    throw new Error(
+      `agent join request ${join.requestId} is pending admin approval. Resolve it in /admin/agents, then restart the poet.`,
+    );
   }
-  const principal: Principal = { actorId, orgId: opts.orgId, scopes: [], provider: "poet-agent" };
-  saveState({ orgId: opts.orgId, actorId, provider: principal.provider, createdAt: new Date().toISOString() });
-  return { principal, client, reused: false };
+
+  const request = await fetch(`${appOrigin}/api/team/agents/join-requests`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ displayName: opts.displayName, orgId: opts.orgId }),
+  });
+  const payload = (await request.json()) as {
+    requestId?: string;
+    requestSecret?: string;
+    error?: string;
+  };
+  if (!request.ok || !payload.requestId || !payload.requestSecret) {
+    throw new Error(payload.error ?? `failed to create agent join request (${request.status})`);
+  }
+  saveJoinRequestState({
+    requestId: payload.requestId,
+    requestSecret: payload.requestSecret,
+    orgId: opts.orgId,
+    displayName: opts.displayName,
+    createdAt: new Date().toISOString(),
+  });
+  throw new Error(
+    `agent join request ${payload.requestId} submitted. Approve it in /admin/agents, then restart the poet.`,
+  );
 }
