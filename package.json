@@ -26,11 +26,13 @@
     "@mariozechner/pi-ai": "0.66.1",
     "@mariozechner/pi-coding-agent": "0.66.1",
     "hono": "4.9.7",
+    "pg": "^8.20.0",
     "ws": "8.18.3",
     "zod": "3.25.76"
   },
   "devDependencies": {
     "@types/node": "22.16.5",
+    "@types/pg": "^8.20.0",
     "@types/ws": "8.18.1",
     "tsx": "4.20.3",
     "typescript": "5.8.3",

@@ -2,10 +2,12 @@ import type { SqlAdapter } from "./db.js";
 import type { StorageConfig, StorageKind } from "./storage.js";
 import { DEFAULT_ARTIFACT_MAX_BYTES } from "./storage.js";
 
-export type PluginConfigEntry = string | {
-  name: string;
-  options?: Record<string, unknown>;
-};
+export type PluginConfigEntry =
+  | string
+  | {
+      name: string;
+      options?: Record<string, unknown>;
+    };
 
 export type ServerConfig = {
   port: number;
@@ -24,12 +26,22 @@ export type ServerConfig = {
 };
 
 function parseStorageAdapter(value: string | undefined): SqlAdapter {
-  // v1 supports only `pglite`. Unknown/legacy values (e.g. "sqlite") are
-  // coerced to the default and a warning is the caller's responsibility.
-  if (value && value !== "pglite") {
-    throw new Error(`unsupported STORAGE_ADAPTER: ${value}. Supported: pglite`);
+  if (!value || value === "pglite") return "pglite";
+  if (value === "postgres") return "postgres";
+  throw new Error(
+    `unsupported STORAGE_ADAPTER: ${value}. Supported: pglite, postgres`,
+  );
+}
+
+function assertStoragePath(adapter: SqlAdapter, path: string): void {
+  if (!path || path.trim().length === 0) {
+    throw new Error("storage.path must be non-empty");
   }
-  return "pglite";
+  if (adapter === "postgres" && path.startsWith("memory://")) {
+    throw new Error(
+      "postgres adapter requires storage.path to be a Postgres connection string",
+    );
+  }
 }
 
 function parsePluginsFromEnv(value: string | undefined): PluginConfigEntry[] {
@@ -49,12 +61,16 @@ function parseBool(value: string | undefined, fallback: boolean): boolean {
 function parseArtifactsStorageKind(value: string | undefined): StorageKind {
   if (!value) return "local-fs";
   if (value === "memory" || value === "local-fs") return value;
-  throw new Error(`unsupported ARTIFACTS_STORAGE: ${value}. Supported: memory, local-fs`);
+  throw new Error(
+    `unsupported ARTIFACTS_STORAGE: ${value}. Supported: memory, local-fs`,
+  );
 }
 
 function defaultArtifactsConfig(env: NodeJS.ProcessEnv): StorageConfig {
   const kind = parseArtifactsStorageKind(env.ARTIFACTS_STORAGE);
-  const maxBytes = env.ARTIFACTS_MAX_BYTES ? Number(env.ARTIFACTS_MAX_BYTES) : DEFAULT_ARTIFACT_MAX_BYTES;
+  const maxBytes = env.ARTIFACTS_MAX_BYTES
+    ? Number(env.ARTIFACTS_MAX_BYTES)
+    : DEFAULT_ARTIFACT_MAX_BYTES;
   if (kind === "memory") {
     return { kind, maxBytes };
   }
@@ -65,13 +81,17 @@ function defaultArtifactsConfig(env: NodeJS.ProcessEnv): StorageConfig {
   };
 }
 
-export function defaultServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+export function defaultServerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): ServerConfig {
   const adapter = parseStorageAdapter(env.STORAGE_ADAPTER);
+  const path = env.STORAGE_PATH ?? "memory://server";
+  assertStoragePath(adapter, path);
   return {
     port: Number(env.PORT ?? "3000"),
     storage: {
       adapter,
-      path: env.STORAGE_PATH ?? "memory://server",
+      path,
     },
     artifacts: defaultArtifactsConfig(env),
     plugins: parsePluginsFromEnv(env.PLUGINS),
@@ -79,7 +99,9 @@ export function defaultServerConfig(env: NodeJS.ProcessEnv = process.env): Serve
   };
 }
 
-export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+export function parseServerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): ServerConfig {
   const raw = env.MESSAGE_LAYER_CONFIG;
   if (!raw) return defaultServerConfig(env);
 
@@ -92,8 +114,10 @@ export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerC
   const defaults = defaultServerConfig(env);
 
   const adapter = parsed.storage?.adapter ?? defaults.storage.adapter;
-  if (adapter !== "pglite") {
-    throw new Error(`unsupported storage.adapter: ${adapter as string}. Supported: pglite`);
+  if (adapter !== "pglite" && adapter !== "postgres") {
+    throw new Error(
+      `unsupported storage.adapter: ${adapter as string}. Supported: pglite, postgres`,
+    );
   }
 
   const artifactsRaw = (parsed as Partial<ServerConfig>).artifacts;
@@ -105,11 +129,14 @@ export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerC
       }
     : defaults.artifacts;
 
+  const storagePath = parsed.storage?.path ?? defaults.storage.path;
+  assertStoragePath(adapter, storagePath);
+
   return {
     port: parsed.port ?? defaults.port,
     storage: {
       adapter,
-      path: parsed.storage?.path ?? defaults.storage.path,
+      path: storagePath,
     },
     artifacts,
     plugins: parsed.plugins ?? defaults.plugins,
@@ -117,6 +144,8 @@ export function parseServerConfig(env: NodeJS.ProcessEnv = process.env): ServerC
   };
 }
 
-export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+export function loadServerConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): ServerConfig {
   return parseServerConfig(env);
 }

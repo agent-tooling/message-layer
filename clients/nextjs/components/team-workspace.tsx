@@ -27,8 +27,19 @@ type Member = {
   appRole: "owner" | "admin" | "member" | null;
   effectiveCapabilities: string[];
 };
-type Attachment = { id: string; name: string; mimeType: string; sizeBytes: number; url: string };
-type ActorRow = { actorId: string; displayName: string; actorType: string; createdAt: string };
+type Attachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  url: string;
+};
+type ActorRow = {
+  actorId: string;
+  displayName: string;
+  actorType: string;
+  createdAt: string;
+};
 type Thread = { id: string; parentMessageId: string; createdAt: string };
 type PermissionRequest = ApprovalPermissionRequest;
 type WebhookSubscription = {
@@ -52,7 +63,9 @@ export function TeamWorkspace() {
   const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [newChannelName, setNewChannelName] = useState("");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [threadsByChannel, setThreadsByChannel] = useState<Record<string, Thread[]>>({});
+  const [threadsByChannel, setThreadsByChannel] = useState<
+    Record<string, Thread[]>
+  >({});
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<PermissionRequest[]>([]);
   const [canResolveApprovals, setCanResolveApprovals] = useState(false);
@@ -90,10 +103,15 @@ export function TeamWorkspace() {
 
   const activeThreadParentMessage = useMemo(() => {
     if (!activeThread) return null;
-    return messages.find((message) => message.id === activeThread.parentMessageId) ?? null;
+    return (
+      messages.find((message) => message.id === activeThread.parentMessageId) ??
+      null
+    );
   }, [activeThread, messages]);
 
-  const activeThreadSiblings = activeThread ? threadsByParentMessage[activeThread.parentMessageId] ?? [] : [];
+  const activeThreadSiblings = activeThread
+    ? (threadsByParentMessage[activeThread.parentMessageId] ?? [])
+    : [];
   const activeThreadIndex = activeThread
     ? activeThreadSiblings.findIndex((thread) => thread.id === activeThread.id)
     : -1;
@@ -106,7 +124,10 @@ export function TeamWorkspace() {
     return map;
   }, [actors]);
 
-  const agents = useMemo(() => actors.filter((actor) => actor.actorType === "agent"), [actors]);
+  const agents = useMemo(
+    () => actors.filter((actor) => actor.actorType === "agent"),
+    [actors],
+  );
   const humanMembers = useMemo(
     () => members.filter((member) => member.actorType === "human"),
     [members],
@@ -130,39 +151,52 @@ export function TeamWorkspace() {
     setChannels(channelResult.channels);
     setMembers(memberResult.members);
     setActors(actorResult.actors);
-    const hasActive = channelResult.channels.some((channel) => channel.id === activeChannelId);
+    const hasActive = channelResult.channels.some(
+      (channel) => channel.id === activeChannelId,
+    );
     if ((!activeChannelId || !hasActive) && channelResult.channels[0]) {
       setActiveChannelId(channelResult.channels[0].id);
     }
   }
 
   async function refreshApprovals() {
-    const result = await api<{ requests: PermissionRequest[]; canResolve?: boolean }>(
-      "/api/team/permission-requests",
-    );
+    const result = await api<{
+      requests: PermissionRequest[];
+      canResolve?: boolean;
+    }>("/api/team/permission-requests");
     setApprovals(result.requests);
     setCanResolveApprovals(result.canResolve === true);
   }
 
   async function refreshMessages(channelId: string) {
-    const result = await api<{ messages: Message[] }>(`/api/team/channels/${channelId}/messages`);
+    const result = await api<{ messages: Message[] }>(
+      `/api/team/channels/${channelId}/messages`,
+    );
     setMessages(result.messages);
   }
 
   async function refreshWebhooks() {
-    const result = await api<{ subscriptions: WebhookSubscription[]; available?: boolean }>("/api/team/webhooks");
+    const result = await api<{
+      subscriptions: WebhookSubscription[];
+      available?: boolean;
+    }>("/api/team/webhooks");
     setWebhooks(result.subscriptions);
     setWebhooksAvailable(result.available !== false);
   }
 
   async function refreshThreads(channelId: string) {
-    const result = await api<{ threads: Thread[] }>(`/api/team/channels/${channelId}/threads`);
+    const result = await api<{ threads: Thread[] }>(
+      `/api/team/channels/${channelId}/threads`,
+    );
     setThreadsByChannel((prev) => ({ ...prev, [channelId]: result.threads }));
   }
 
   useEffect(() => {
     if (!session) return;
-    void api<{ ok: true; defaultChannelId: string; actorId: string }>("/api/team/bootstrap", { method: "POST" })
+    void api<{ ok: true; defaultChannelId: string; actorId: string }>(
+      "/api/team/bootstrap",
+      { method: "POST" },
+    )
       .then((result) => {
         setCurrentActorId(result.actorId);
         if (result.defaultChannelId) {
@@ -184,8 +218,12 @@ export function TeamWorkspace() {
     // Close any open thread when switching channels so the right panel
     // never shows a thread from a channel the user just left.
     setActiveThreadId(null);
-    void refreshMessages(activeChannelId).catch((err) => setError((err as Error).message));
-    void refreshThreads(activeChannelId).catch((err) => setError((err as Error).message));
+    void refreshMessages(activeChannelId).catch((err) =>
+      setError((err as Error).message),
+    );
+    void refreshThreads(activeChannelId).catch((err) =>
+      setError((err as Error).message),
+    );
     const timer = setInterval(() => {
       void refreshMessages(activeChannelId).catch(() => {});
       void refreshThreads(activeChannelId).catch(() => {});
@@ -201,7 +239,9 @@ export function TeamWorkspace() {
   // thread ids never leak into the right panel.
   useEffect(() => {
     if (!activeThreadId) return;
-    const stillPresent = activeThreads.some((thread) => thread.id === activeThreadId);
+    const stillPresent = activeThreads.some(
+      (thread) => thread.id === activeThreadId,
+    );
     if (!stillPresent) setActiveThreadId(null);
   }, [activeThreadId, activeThreads]);
 
@@ -232,10 +272,13 @@ export function TeamWorkspace() {
     form.set("streamType", "channel");
     form.set("file", file);
     try {
-      const result = await api<{ id: string; filename: string; mimeType: string; sizeBytes: number; downloadPath: string }>(
-        "/api/team/attachments",
-        { method: "POST", body: form },
-      );
+      const result = await api<{
+        id: string;
+        filename: string;
+        mimeType: string;
+        sizeBytes: number;
+        downloadPath: string;
+      }>("/api/team/attachments", { method: "POST", body: form });
       setPendingUpload((prev) => [
         ...prev,
         {
@@ -314,19 +357,27 @@ export function TeamWorkspace() {
     }
   }
 
-  async function resolveApproval(requestId: string, approve: boolean, options: ResolveApprovalOptions) {
+  async function resolveApproval(
+    requestId: string,
+    approve: boolean,
+    options: ResolveApprovalOptions,
+  ) {
     try {
       await api(`/api/team/permission-requests/${requestId}/resolve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           approve,
-          notes: options.notes ?? (approve ? "approved via inbox" : "denied via inbox"),
+          notes:
+            options.notes ??
+            (approve ? "approved via inbox" : "denied via inbox"),
           expiresAt: options.expiresAt ?? null,
           maxUses: options.maxUses ?? null,
         }),
       });
-      setApprovals((prev) => prev.filter((request) => request.requestId !== requestId));
+      setApprovals((prev) =>
+        prev.filter((request) => request.requestId !== requestId),
+      );
     } catch (err) {
       setError((err as Error).message);
     }
@@ -377,13 +428,21 @@ export function TeamWorkspace() {
     <div className="flex h-screen bg-zinc-950 text-zinc-100">
       <aside className="flex w-80 flex-col overflow-y-auto border-r border-zinc-800/80 bg-zinc-950/90 px-4 py-5">
         <div className="mb-5 border-b border-zinc-800/80 pb-4">
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Workspace</p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">Team Messaging</h2>
-          <p className="mt-1 text-xs text-zinc-400">Team + agents on message-layer</p>
+          <p className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">
+            Workspace
+          </p>
+          <h2 className="mt-2 text-xl font-semibold tracking-tight">
+            Team Messaging
+          </h2>
+          <p className="mt-1 text-xs text-zinc-400">
+            Team + agents on message-layer
+          </p>
         </div>
 
         <div>
-          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">Channels</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            Channels
+          </h3>
         </div>
         <div className="mt-3 space-y-1.5">
           {channels.map((channel) => (
@@ -418,43 +477,48 @@ export function TeamWorkspace() {
         </div>
 
         <div className="mt-6 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3">
-          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">People</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            People
+          </h3>
           <ul className="mt-2 space-y-1.5 text-sm text-zinc-300">
             {humanMembers.map((member) => (
-                <li key={member.actorId} className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="block truncate">{member.displayName}</span>
-                    <div className="mt-1 flex flex-wrap gap-1">
-                      <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
-                        {member.actorType}
+              <li
+                key={member.actorId}
+                className="flex items-center justify-between gap-2"
+              >
+                <div className="min-w-0">
+                  <span className="block truncate">{member.displayName}</span>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+                      {member.actorType}
+                    </span>
+                    {member.appRole ? (
+                      <span className="rounded bg-blue-950 px-2 py-0.5 text-[10px] uppercase tracking-wide text-blue-300">
+                        role:{member.appRole}
                       </span>
-                      {member.appRole ? (
-                        <span className="rounded bg-blue-950 px-2 py-0.5 text-[10px] uppercase tracking-wide text-blue-300">
-                          role:{member.appRole}
-                        </span>
-                      ) : null}
-                    </div>
-                    <p className="mt-1 truncate text-[10px] text-zinc-500">
-                      grants: {member.effectiveCapabilities.join(", ") || "none"}
-                    </p>
+                    ) : null}
                   </div>
-                  {member.appRole !== "owner" ? (
-                    <select
-                      className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-[10px] uppercase text-zinc-300"
-                      value={member.appRole ?? "member"}
-                      onChange={(event) =>
-                        void updateMemberRole(
-                          member.actorId,
-                          event.target.value === "admin" ? "admin" : "member",
-                        )
-                      }
-                    >
-                      <option value="member">member</option>
-                      <option value="admin">admin</option>
-                    </select>
-                  ) : null}
-                </li>
-              ))}
+                  <p className="mt-1 truncate text-[10px] text-zinc-500">
+                    grants: {member.effectiveCapabilities.join(", ") || "none"}
+                  </p>
+                </div>
+                {member.appRole !== "owner" ? (
+                  <select
+                    className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-[10px] uppercase text-zinc-300"
+                    value={member.appRole ?? "member"}
+                    onChange={(event) =>
+                      void updateMemberRole(
+                        member.actorId,
+                        event.target.value === "admin" ? "admin" : "member",
+                      )
+                    }
+                  >
+                    <option value="member">member</option>
+                    <option value="admin">admin</option>
+                  </select>
+                ) : null}
+              </li>
+            ))}
             {humanMembers.length === 0 ? (
               <li className="text-xs text-zinc-500">No members yet.</li>
             ) : null}
@@ -462,7 +526,9 @@ export function TeamWorkspace() {
         </div>
 
         <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">Invite teammate</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
+            Invite teammate
+          </p>
           <input
             className="mt-2 w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-sm outline-none transition focus:border-emerald-500/70"
             placeholder="teammate@company.com"
@@ -472,7 +538,9 @@ export function TeamWorkspace() {
           <select
             className="mt-2 w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-sm outline-none transition focus:border-emerald-500/70"
             value={inviteRole}
-            onChange={(event) => setInviteRole(event.target.value === "admin" ? "admin" : "member")}
+            onChange={(event) =>
+              setInviteRole(event.target.value === "admin" ? "admin" : "member")
+            }
           >
             <option value="member">member</option>
             <option value="admin">admin</option>
@@ -501,13 +569,20 @@ export function TeamWorkspace() {
         </div>
 
         <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">Agents</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
+            Agents
+          </p>
           {agents.length > 0 ? (
             <ul className="mt-2 space-y-1 text-zinc-300">
               {agents.map((agent) => (
-                <li key={agent.actorId} className="flex items-center justify-between gap-2">
+                <li
+                  key={agent.actorId}
+                  className="flex items-center justify-between gap-2"
+                >
                   <span className="truncate">{agent.displayName}</span>
-                  <span className="text-zinc-500">{agent.actorId.slice(0, 8)}</span>
+                  <span className="text-zinc-500">
+                    {agent.actorId.slice(0, 8)}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -526,7 +601,9 @@ export function TeamWorkspace() {
         </div>
 
         <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">Webhooks</p>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
+            Webhooks
+          </p>
           {!webhooksAvailable ? (
             <p className="mt-2">Webhook plugin is not enabled.</p>
           ) : webhooks.length === 0 ? (
@@ -534,13 +611,20 @@ export function TeamWorkspace() {
           ) : (
             <ul className="mt-2 space-y-2">
               {webhooks.map((hook) => (
-                <li key={hook.id} className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-2">
+                <li
+                  key={hook.id}
+                  className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-2"
+                >
                   <p className="truncate text-zinc-300">{hook.endpoint}</p>
                   <p className="mt-1 text-[11px] text-zinc-500">
                     {hook.eventTypes.join(", ")}
-                    {hook.streamId ? ` · stream ${hook.streamId.slice(0, 8)}` : " · org-wide"}
+                    {hook.streamId
+                      ? ` · stream ${hook.streamId.slice(0, 8)}`
+                      : " · org-wide"}
                   </p>
-                  {!hook.enabled ? <p className="mt-1 text-[11px] text-amber-300">disabled</p> : null}
+                  {!hook.enabled ? (
+                    <p className="mt-1 text-[11px] text-amber-300">disabled</p>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -548,22 +632,30 @@ export function TeamWorkspace() {
         </div>
 
         <div className="mt-auto pt-4 text-xs text-zinc-500">
-          Signed in as <span className="text-zinc-300">{session?.user?.email ?? "unknown"}</span>
+          Signed in as{" "}
+          <span className="text-zinc-300">
+            {session?.user?.email ?? "unknown"}
+          </span>
         </div>
       </aside>
 
       <main className="flex flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-950/70 px-6 py-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">Active channel</p>
+            <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">
+              Active channel
+            </p>
             <p className="mt-1 text-base font-semibold text-zinc-100">
-              #{channels.find((channel) => channel.id === activeChannelId)?.name ?? "Select a channel"}
+              #
+              {channels.find((channel) => channel.id === activeChannelId)
+                ?.name ?? "Select a channel"}
             </p>
           </div>
           <div className="flex items-center gap-2">
             {canResolveApprovals && approvals.length > 0 ? (
               <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-300">
-                {approvals.length} approval{approvals.length === 1 ? "" : "s"} pending
+                {approvals.length} approval{approvals.length === 1 ? "" : "s"}{" "}
+                pending
               </span>
             ) : null}
             <details className="group relative">
@@ -571,13 +663,22 @@ export function TeamWorkspace() {
                 Admin ▾
               </summary>
               <div className="absolute right-0 z-20 mt-2 min-w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-lg shadow-black/50">
-                <Link href="/admin" className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100">
+                <Link
+                  href="/admin"
+                  className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100"
+                >
                   Overview
                 </Link>
-                <Link href="/admin/agents" className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100">
+                <Link
+                  href="/admin/agents"
+                  className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100"
+                >
                   Agents
                 </Link>
-                <Link href="/admin/activity" className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100">
+                <Link
+                  href="/admin/activity"
+                  className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100"
+                >
                   Activity
                 </Link>
               </div>
@@ -632,7 +733,11 @@ export function TeamWorkspace() {
             <div className="flex flex-wrap items-center gap-3">
               <label className="inline-flex cursor-pointer items-center rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800">
                 Attach file
-                <input className="hidden" type="file" onChange={uploadAttachment} />
+                <input
+                  className="hidden"
+                  type="file"
+                  onChange={uploadAttachment}
+                />
               </label>
               <button
                 className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
@@ -643,13 +748,15 @@ export function TeamWorkspace() {
               </button>
               {activeThreads.length > 0 ? (
                 <span className="text-xs text-zinc-500">
-                  {activeThreads.length} thread{activeThreads.length === 1 ? "" : "s"} in channel
+                  {activeThreads.length} thread
+                  {activeThreads.length === 1 ? "" : "s"} in channel
                 </span>
               ) : null}
             </div>
             {pendingUpload.length > 0 ? (
               <div className="text-xs text-zinc-400">
-                Pending attachments: {pendingUpload.map((file) => file.name).join(", ")}
+                Pending attachments:{" "}
+                {pendingUpload.map((file) => file.name).join(", ")}
               </div>
             ) : null}
             {error ? <p className="text-xs text-red-400">{error}</p> : null}

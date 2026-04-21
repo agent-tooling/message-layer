@@ -45,16 +45,32 @@ const roleTemplates: Record<UserRole, RoleGrantTemplate[]> = {
     { capability: "message:append", resourceType: "channel", resourceId: null },
     { capability: "message:append", resourceType: "thread", resourceId: null },
     { capability: "thread:create", resourceType: "channel", resourceId: null },
-    { capability: "channel:create", resourceType: "org", resourceId: orgPlaceholder },
-    { capability: "grant:create", resourceType: "org", resourceId: orgPlaceholder },
+    {
+      capability: "channel:create",
+      resourceType: "org",
+      resourceId: orgPlaceholder,
+    },
+    {
+      capability: "grant:create",
+      resourceType: "org",
+      resourceId: orgPlaceholder,
+    },
     { capability: "channel:admin", resourceType: "channel", resourceId: null },
   ],
   admin: [
     { capability: "message:append", resourceType: "channel", resourceId: null },
     { capability: "message:append", resourceType: "thread", resourceId: null },
     { capability: "thread:create", resourceType: "channel", resourceId: null },
-    { capability: "channel:create", resourceType: "org", resourceId: orgPlaceholder },
-    { capability: "grant:create", resourceType: "org", resourceId: orgPlaceholder },
+    {
+      capability: "channel:create",
+      resourceType: "org",
+      resourceId: orgPlaceholder,
+    },
+    {
+      capability: "grant:create",
+      resourceType: "org",
+      resourceId: orgPlaceholder,
+    },
     { capability: "channel:admin", resourceType: "channel", resourceId: null },
   ],
   member: [
@@ -104,7 +120,9 @@ async function mlRequest<T>(
     }
   }
   if (!response.ok) {
-    throw new Error(`message-layer ${response.status}: ${JSON.stringify(payload)}`);
+    throw new Error(
+      `message-layer ${response.status}: ${JSON.stringify(payload)}`,
+    );
   }
   return payload as T;
 }
@@ -142,7 +160,11 @@ async function ensureDefaultChannel(principal: MlPrincipal): Promise<string> {
   return created.channelId;
 }
 
-async function createActor(orgId: string, displayName: string, actorType: "human" | "agent" | "app"): Promise<string> {
+async function createActor(
+  orgId: string,
+  displayName: string,
+  actorType: "human" | "agent" | "app",
+): Promise<string> {
   const created = await mlRequest<{ actorId: string }>("/v1/actors", {
     method: "POST",
     body: { orgId, actorType, displayName },
@@ -171,7 +193,10 @@ async function createGrant(
   });
 }
 
-async function revokeAllActorGrants(principal: MlPrincipal, actorId: string): Promise<void> {
+async function revokeAllActorGrants(
+  principal: MlPrincipal,
+  actorId: string,
+): Promise<void> {
   await mlRequest(`/v1/actors/${actorId}/revoke-grants`, {
     method: "POST",
     principal,
@@ -205,14 +230,19 @@ function resolveRole(input: string | null | undefined): UserRole {
   return "member";
 }
 
-export function parseHumanRoleInput(input: string | null | undefined): UserRole | null {
+export function parseHumanRoleInput(
+  input: string | null | undefined,
+): UserRole | null {
   if (input === "owner" || input === "admin" || input === "member") {
     return input;
   }
   return null;
 }
 
-function resolveRoleResourceId(resourceId: string | null, orgId: string): string | null {
+function resolveRoleResourceId(
+  resourceId: string | null,
+  orgId: string,
+): string | null {
   if (resourceId === orgPlaceholder) {
     return orgId;
   }
@@ -257,7 +287,9 @@ async function reconcileUserRole(input: {
   setUserRole(input.userId, input.role);
 }
 
-export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrincipal> {
+export async function ensureUserPrincipal(
+  user: MlSessionUser,
+): Promise<MlPrincipal> {
   const cached = inFlightPrincipalResolutions.get(user.id);
   if (cached) {
     return cached;
@@ -329,7 +361,8 @@ export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrinci
     });
 
     const desiredRole = resolveRole(
-      getUserRole(user.id) ?? (getSetting("first_user_id") === user.id ? "owner" : "member"),
+      getUserRole(user.id) ??
+        (getSetting("first_user_id") === user.id ? "owner" : "member"),
     );
     const principal: MlPrincipal = {
       actorId,
@@ -365,7 +398,10 @@ export async function getDefaultChannelId(): Promise<string> {
   return ensureDefaultChannel(syntheticPrincipal);
 }
 
-export async function createAgentActor(orgId: string, displayName: string): Promise<string> {
+export async function createAgentActor(
+  orgId: string,
+  displayName: string,
+): Promise<string> {
   return createActor(orgId, displayName, "agent");
 }
 
@@ -416,10 +452,15 @@ export async function canManageRoles(principal: MlPrincipal): Promise<boolean> {
   return checkActorCapability(principal, principal.actorId, "grant:create");
 }
 
-export async function setActorRole(actorId: string, role: UserRole): Promise<void> {
+export async function setActorRole(
+  actorId: string,
+  role: UserRole,
+): Promise<void> {
   const userId = getUserIdByActorId(actorId);
   if (!userId) {
-    throw new Error("cannot set role for actor that is not mapped to a signed-in user");
+    throw new Error(
+      "cannot set role for actor that is not mapped to a signed-in user",
+    );
   }
   const actor = getUserActorMap(userId);
   if (!actor) {
@@ -433,7 +474,10 @@ export async function setActorRole(actorId: string, role: UserRole): Promise<voi
   });
 }
 
-export async function setUserRoleForPrincipal(user: MlSessionUser, role: UserRole): Promise<MlPrincipal> {
+export async function setUserRoleForPrincipal(
+  user: MlSessionUser,
+  role: UserRole,
+): Promise<MlPrincipal> {
   const principal = await ensureUserPrincipal(user);
   await reconcileUserRole({
     userId: user.id,
@@ -447,8 +491,12 @@ export async function setUserRoleForPrincipal(user: MlSessionUser, role: UserRol
   };
 }
 
-export async function listChannels(principal: MlPrincipal): Promise<Array<{ id: string; name: string; visibility: string }>> {
-  const result = await mlRequest<{ channels: Array<{ id: string; name: string; visibility: string }> }>("/v1/channels", {
+export async function listChannels(
+  principal: MlPrincipal,
+): Promise<Array<{ id: string; name: string; visibility: string }>> {
+  const result = await mlRequest<{
+    channels: Array<{ id: string; name: string; visibility: string }>;
+  }>("/v1/channels", {
     principal,
   });
   return result.channels;
@@ -456,18 +504,42 @@ export async function listChannels(principal: MlPrincipal): Promise<Array<{ id: 
 
 export async function listMembers(
   principal: MlPrincipal,
-): Promise<Array<{ actorId: string; displayName: string; actorType: string; role: string }>> {
+): Promise<
+  Array<{
+    actorId: string;
+    displayName: string;
+    actorType: string;
+    role: string;
+  }>
+> {
   const result = await mlRequest<{
-    members: Array<{ actorId: string; displayName: string; actorType: string; role: string }>;
+    members: Array<{
+      actorId: string;
+      displayName: string;
+      actorType: string;
+      role: string;
+    }>;
   }>("/v1/members", { principal });
   return result.members;
 }
 
 export async function listActors(
   principal: MlPrincipal,
-): Promise<Array<{ actorId: string; displayName: string; actorType: string; createdAt: string }>> {
+): Promise<
+  Array<{
+    actorId: string;
+    displayName: string;
+    actorType: string;
+    createdAt: string;
+  }>
+> {
   const result = await mlRequest<{
-    actors: Array<{ actorId: string; displayName: string; actorType: string; createdAt: string }>;
+    actors: Array<{
+      actorId: string;
+      displayName: string;
+      actorType: string;
+      createdAt: string;
+    }>;
   }>("/v1/actors", { principal });
   return result.actors;
 }
@@ -545,7 +617,10 @@ export async function appendMessage(
   input: {
     streamId: string;
     streamType: "channel" | "thread";
-    parts: Array<{ type: "text" | "artifact"; payload: Record<string, unknown> }>;
+    parts: Array<{
+      type: "text" | "artifact";
+      payload: Record<string, unknown>;
+    }>;
   },
 ): Promise<void> {
   await mlRequest("/v1/messages", {
@@ -560,7 +635,10 @@ export async function appendMessage(
   });
 }
 
-export async function createChannel(principal: MlPrincipal, name: string): Promise<string> {
+export async function createChannel(
+  principal: MlPrincipal,
+  name: string,
+): Promise<string> {
   const result = await mlRequest<{ channelId: string }>("/v1/channels", {
     method: "POST",
     principal,
@@ -578,16 +656,19 @@ export async function createPermissionRequest(
     context?: Record<string, unknown>;
   },
 ): Promise<string> {
-  const result = await mlRequest<{ requestId: string }>("/v1/permission-requests", {
-    method: "POST",
-    principal,
-    body: {
-      action: input.action,
-      resourceType: input.resourceType,
-      resourceId: input.resourceId,
-      context: input.context ?? {},
+  const result = await mlRequest<{ requestId: string }>(
+    "/v1/permission-requests",
+    {
+      method: "POST",
+      principal,
+      body: {
+        action: input.action,
+        resourceType: input.resourceType,
+        resourceId: input.resourceId,
+        context: input.context ?? {},
+      },
     },
-  });
+  );
   return result.requestId;
 }
 
@@ -595,10 +676,9 @@ export async function listThreads(
   principal: MlPrincipal,
   channelId: string,
 ): Promise<Array<{ id: string; parentMessageId: string; visibility: string }>> {
-  const result = await mlRequest<{ threads: Array<{ id: string; parentMessageId: string; visibility: string }> }>(
-    `/v1/channels/${channelId}/threads`,
-    { principal },
-  );
+  const result = await mlRequest<{
+    threads: Array<{ id: string; parentMessageId: string; visibility: string }>;
+  }>(`/v1/channels/${channelId}/threads`, { principal });
   return result.threads;
 }
 
@@ -682,11 +762,14 @@ export async function revokeAllGrantsForActor(
   actorId: string,
   reason?: string,
 ): Promise<{ revokedGrantIds: string[] }> {
-  return mlRequest<{ revokedGrantIds: string[] }>(`/v1/actors/${actorId}/revoke-grants`, {
-    method: "POST",
-    principal,
-    body: { reason: reason ?? "" },
-  });
+  return mlRequest<{ revokedGrantIds: string[] }>(
+    `/v1/actors/${actorId}/revoke-grants`,
+    {
+      method: "POST",
+      principal,
+      body: { reason: reason ?? "" },
+    },
+  );
 }
 
 export async function fetchAuditRows(
@@ -697,9 +780,12 @@ export async function fetchAuditRows(
   if (options.actorId) params.set("actorId", options.actorId);
   if (options.limit) params.set("limit", String(options.limit));
   const qs = params.toString();
-  const result = await mlRequest<{ rows: MlAuditRow[] }>(`/v1/audit/rows${qs ? `?${qs}` : ""}`, {
-    principal,
-  });
+  const result = await mlRequest<{ rows: MlAuditRow[] }>(
+    `/v1/audit/rows${qs ? `?${qs}` : ""}`,
+    {
+      principal,
+    },
+  );
   return result.rows;
 }
 
@@ -731,18 +817,21 @@ export async function registerArtifact(
     sha256?: string;
   },
 ): Promise<MlArtifactRecord> {
-  const result = await mlRequest<{ artifact: MlArtifactRecord }>("/v1/artifacts", {
-    method: "POST",
-    principal,
-    body: {
-      streamId: input.streamId,
-      streamType: input.streamType,
-      filename: input.filename,
-      contentType: input.contentType,
-      contentBase64: input.content.toString("base64"),
-      sha256: input.sha256,
+  const result = await mlRequest<{ artifact: MlArtifactRecord }>(
+    "/v1/artifacts",
+    {
+      method: "POST",
+      principal,
+      body: {
+        streamId: input.streamId,
+        streamType: input.streamType,
+        filename: input.filename,
+        contentType: input.contentType,
+        contentBase64: input.content.toString("base64"),
+        sha256: input.sha256,
+      },
     },
-  });
+  );
   return result.artifact;
 }
 

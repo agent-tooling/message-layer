@@ -5,9 +5,9 @@
 - Node.js ≥ 22
 - [pnpm](https://pnpm.io) (pinned in `package.json` → `packageManager`)
 
-No Docker, no hosted database, no external services are required to run the
-full test suite. All tests exercise a real PGlite database, a real Hono
-server, and a real WebSocket server — no mocks of core systems.
+No Docker is required to run the default local suite. By default tests run
+against a real PGlite database, a real Hono server, and a real WebSocket
+server — no mocks of core systems.
 
 ## Install
 
@@ -25,6 +25,15 @@ pnpm run build                  # typecheck + emit to dist/
 pnpm run client:terminal        # Pi agent REPL
 pnpm run client:terminal:demo   # agent-kernel smoke run (no API keys required)
 ```
+
+Optional Neon/Postgres e2e:
+
+```
+NEON_NEW_E2E=1 pnpm run test -- tests/e2e/postgres-neon.test.ts
+```
+
+When `NEON_TEST_DATABASE_URL` is not set, the test provisions a claimable
+database from `neon.new` and runs the workflow against the `postgres` adapter.
 
 ## Layout
 

@@ -1,10 +1,11 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { getAgentSession } from "@/lib/auth";
 
 export async function GET(request: Request) {
-  const agentSession = await auth.api.getAgentSession({
-    headers: request.headers,
-  });
+  const agentSession = (await getAgentSession(request.headers)) as {
+    agent?: unknown;
+    user?: unknown;
+  } | null;
   if (!agentSession) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

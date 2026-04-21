@@ -14,7 +14,9 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const actorId = url.searchParams.get("actorId") ?? undefined;
     const limitRaw = url.searchParams.get("limit");
-    const limit = limitRaw ? Math.max(1, Math.min(1000, Number(limitRaw))) : undefined;
+    const limit = limitRaw
+      ? Math.max(1, Math.min(1000, Number(limitRaw)))
+      : undefined;
     const rows = await fetchAuditRows(principal, { actorId, limit });
     return NextResponse.json({ rows });
   } catch (error) {

@@ -98,7 +98,8 @@ export const auth = betterAuth({
         },
         {
           name: "artifacts.upload",
-          description: "Upload an artifact (binary blob) to a channel or thread",
+          description:
+            "Upload an artifact (binary blob) to a channel or thread",
           input: {
             type: "object",
             required: ["streamId", "filename", "contentType", "contentBase64"],
@@ -123,7 +124,8 @@ export const auth = betterAuth({
         },
         {
           name: "knowledge.promote",
-          description: "Promote a knowledge entry org-wide (requires knowledge:promote grant)",
+          description:
+            "Promote a knowledge entry org-wide (requires knowledge:promote grant)",
           input: {
             type: "object",
             required: ["entryId"],
@@ -147,7 +149,9 @@ export const auth = betterAuth({
         if (capability === "messages.read") {
           const channelId = String(args?.channelId ?? "");
           const afterSeq = Number(args?.afterSeq ?? 0);
-          return { messages: await listMessages(principal, channelId, afterSeq) };
+          return {
+            messages: await listMessages(principal, channelId, afterSeq),
+          };
         }
         if (capability === "messages.append") {
           const channelId = String(args?.channelId ?? "");
@@ -170,7 +174,8 @@ export const auth = betterAuth({
           const filename = String(args?.filename ?? "");
           const contentType = String(args?.contentType ?? "");
           const contentBase64 = String(args?.contentBase64 ?? "");
-          const sha256 = typeof args?.sha256 === "string" ? args.sha256 : undefined;
+          const sha256 =
+            typeof args?.sha256 === "string" ? args.sha256 : undefined;
           const content = Buffer.from(contentBase64, "base64");
           const artifact = await registerArtifact(principal, {
             streamId,
@@ -194,6 +199,26 @@ export const auth = betterAuth({
         }
         return { ok: false };
       },
-    }),
+    }) as unknown as ReturnType<typeof organization>,
   ],
 });
+
+type AuthApiMethod = (input: { headers: Headers }) => Promise<unknown>;
+
+function getAuthApiMethod(name: string): AuthApiMethod {
+  const method = (auth.api as Record<string, unknown>)[name];
+  if (typeof method !== "function") {
+    throw new Error(`auth api method unavailable: ${name}`);
+  }
+  return method as AuthApiMethod;
+}
+
+export async function getAgentConfiguration(
+  headers: Headers,
+): Promise<unknown> {
+  return getAuthApiMethod("getAgentConfiguration")({ headers });
+}
+
+export async function getAgentSession(headers: Headers): Promise<unknown> {
+  return getAuthApiMethod("getAgentSession")({ headers });
+}

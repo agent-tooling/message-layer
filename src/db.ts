@@ -1,12 +1,12 @@
 import { PGlite } from "@electric-sql/pglite";
+import { Pool } from "pg";
 
-// The storage layer is intentionally small. The only adapter shipped in v1 is
-// PGlite, which is Postgres-wire-compatible and satisfies the local-first
-// mandate in AGENTS.md (no Docker, full functionality).
+// The storage layer is intentionally small: one interface, two adapters.
+// - `pglite` for local-first development
+// - `postgres` for hosted deployments and Neon-backed tests
 //
-// A hosted Postgres implementation can be layered on top of the `SqlDatabase`
-// interface without changing any service code. The same schema is used for
-// both modes, so migrations stay single-source.
+// Both adapters share the same schema and transaction semantics so service
+// code stays storage-agnostic.
 
 const SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS organizations (
@@ -190,7 +190,7 @@ CREATE INDEX IF NOT EXISTS idx_grants_lookup ON grants(org_id, actor_id, capabil
 `;
 
 export type SqlValue = string | number | null;
-export type SqlAdapter = "pglite";
+export type SqlAdapter = "pglite" | "postgres";
 
 export interface QueryResultRow {
   [key: string]: unknown;
@@ -238,7 +238,10 @@ class PgliteClient implements SqlDatabase {
           sql: string,
           params: SqlValue[] = [],
         ) => {
-          const result = await this.db.query<R>(rewritePositionalParams(sql), params);
+          const result = await this.db.query<R>(
+            rewritePositionalParams(sql),
+            params,
+          );
           return { rows: result.rows ?? [] };
         },
       };
@@ -256,15 +259,87 @@ class PgliteClient implements SqlDatabase {
   }
 }
 
-export async function createPgliteDatabase(path = "memory://"): Promise<SqlDatabase> {
+class PostgresClient implements SqlDatabase {
+  readonly adapter: SqlAdapter = "postgres";
+
+  constructor(private readonly pool: Pool) {}
+
+  async query<T extends QueryResultRow = QueryResultRow>(
+    sql: string,
+    params: SqlValue[] = [],
+  ): Promise<{ rows: T[] }> {
+    const result = await this.pool.query<T>(
+      rewritePositionalParams(sql),
+      params,
+    );
+    return { rows: result.rows ?? [] };
+  }
+
+  async tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T> {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const txClient: DbClient = {
+        query: async <R extends QueryResultRow = QueryResultRow>(
+          sql: string,
+          params: SqlValue[] = [],
+        ) => {
+          const result = await client.query<R>(
+            rewritePositionalParams(sql),
+            params,
+          );
+          return { rows: result.rows ?? [] };
+        },
+      };
+      const output = await fn(txClient);
+      await client.query("COMMIT");
+      return output;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
+  }
+}
+
+export async function createPgliteDatabase(
+  path = "memory://",
+): Promise<SqlDatabase> {
   const db = new PGlite(path);
   await db.exec(SCHEMA_SQL);
   return new PgliteClient(db);
 }
 
-export async function connect(path = "memory://", adapter: SqlAdapter = "pglite"): Promise<SqlDatabase> {
-  if (adapter !== "pglite") {
-    throw new Error(`unsupported storage adapter: ${adapter as string}`);
+export async function createPostgresDatabase(
+  connectionString: string,
+): Promise<SqlDatabase> {
+  if (!connectionString || connectionString.trim().length === 0) {
+    throw new Error("postgres adapter requires a non-empty connection string");
   }
-  return createPgliteDatabase(path);
+  const pool = new Pool({
+    connectionString,
+    // Neon pooler requires TLS. `pg` accepts this shape in Node and will
+    // ignore it for local plain-text Postgres URLs.
+    ssl: { rejectUnauthorized: false },
+  });
+  await pool.query(SCHEMA_SQL);
+  return new PostgresClient(pool);
+}
+
+export async function connect(
+  path = "memory://",
+  adapter: SqlAdapter = "pglite",
+): Promise<SqlDatabase> {
+  if (adapter === "pglite") {
+    return createPgliteDatabase(path);
+  }
+  if (adapter === "postgres") {
+    return createPostgresDatabase(path);
+  }
+  throw new Error(`unsupported storage adapter: ${adapter as string}`);
 }
