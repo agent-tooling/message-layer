@@ -14,7 +14,9 @@
     "client:terminal:demo": "tsx clients/terminal/client.ts --smoke",
     "demo:hero": "tsx scripts/hero-flow.ts",
     "client:nextjs": "pnpm --dir clients/nextjs run dev",
-    "client:nextjs:build": "pnpm --dir clients/nextjs run build"
+    "client:nextjs:build": "pnpm --dir clients/nextjs run build",
+    "agent:poet": "pnpm --dir agents/poet run start",
+    "agent:poet:once": "pnpm --dir agents/poet run once"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.3.11",

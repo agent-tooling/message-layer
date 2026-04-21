@@ -1,0 +1,26 @@
+{
+  "name": "poet-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A tiny Mastra-powered poet agent that writes into #poems every minute to exercise the message-layer permission flow.",
+  "scripts": {
+    "start": "tsx src/poet.ts",
+    "once": "tsx src/poet.ts --once",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mastra/core": "1.24.1",
+    "better-sqlite3": "11.10.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/node": "22.16.5",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
