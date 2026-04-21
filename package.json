@@ -13,6 +13,10 @@
     "./agent-kernel": {
       "import": "./dist/agent-kernel/index.js",
       "types": "./dist/agent-kernel/index.d.ts"
+    },
+    "./sdk": {
+      "import": "./dist/sdk/index.js",
+      "types": "./dist/sdk/index.d.ts"
     }
   },
   "files": [
