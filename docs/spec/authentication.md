@@ -65,3 +65,47 @@ admin gate.
 - `POST /v1/actors` — create an actor in an org
 
 All other endpoints require a valid principal.
+
+## Server-level API key gating
+
+When the server is exposed over the public internet, the `api-key-header-auth`
+built-in plugin adds a shared-secret gate in front of every `/v1/*` request —
+including the normally-unauthenticated `POST /v1/orgs` and `POST /v1/actors`.
+
+Enable it at startup:
+
+```bash
+MESSAGE_LAYER_API_KEY=your-secret PLUGINS=api-key-header-auth node dist/server.js
+```
+
+Or programmatically:
+
+```typescript
+await startServer({
+  plugins: [
+    { name: "api-key-header-auth", options: { strict: true } },
+  ],
+});
+```
+
+The plugin reads the expected key from an environment variable (default
+`MESSAGE_LAYER_API_KEY`) and compares it to the value in the request header
+(default `x-api-key`). Both the header name and env-var key are configurable.
+
+With `strict: true` the server returns `503 Service Unavailable` on every
+`/v1/*` request when the env variable is absent, preventing accidental
+open-access deployments.
+
+From the SDK, pass `apiKey` when constructing the client:
+
+```typescript
+const client = new MessageLayerClient({
+  baseUrl: "https://ml.example.com",
+  apiKey: process.env.MESSAGE_LAYER_API_KEY,
+  principal: { ... },
+});
+```
+
+The SDK sends the key on every HTTP request and includes it as a query
+parameter on WebSocket upgrade URLs. See [plugins.md](./plugins.md) for the
+full plugin option reference and [../sdk.md](../sdk.md) for the SDK option.

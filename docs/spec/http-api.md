@@ -51,6 +51,36 @@ List actors in the principal's org.
 
 **Response** `200` — `{ "actors": [{ "actorId", "actorType", "displayName", "createdAt" }] }`
 
+### `GET /v1/actors/:actorId/grants`
+
+List all active grants held by a specific actor. Requires read access to the
+actor's org (any authenticated principal in the same org may call this).
+
+**Response** `200`
+```json
+{
+  "grants": [{
+    "grantId": "...", "actorId": "...", "capability": "message:append",
+    "resourceType": "channel", "resourceId": "...",
+    "expiresAt": null, "maxUses": null, "usesCount": 0, "remainingUses": null,
+    "constraints": {}, "createdAt": "...", "createdByActorId": "...", "active": true
+  }]
+}
+```
+
+### `POST /v1/actors/:actorId/revoke-grants`
+
+Revoke every active grant held by an actor in one call ("kick"). Requires
+`grant:create` scope. Emits one `grant.revoked` event per affected grant,
+each carrying `bulk: true`.
+
+**Request** (optional body)
+| Field  | Type   | Required | Description |
+|--------|--------|----------|-------------|
+| reason | string | no       | Free-form reason recorded in each `grant.revoked` event. |
+
+**Response** `200` — `{ "revokedGrantIds": ["..."] }`
+
 ### `GET /v1/members`
 
 List org memberships (actors with an org-wide membership, not limited to a
@@ -481,6 +511,47 @@ target stream (`targetStreamId` / `targetStreamType`), then mark stream as
   "streamSeq": 42
 }
 ```
+
+## Webhooks (provided by the `webhooks` plugin)
+
+The `webhooks` plugin delivers domain events as outbound HTTP POST requests to
+registered subscriber URLs. All routes require the `webhooks` plugin to be
+enabled (see [plugins.md](./plugins.md)).
+
+### `POST /v1/webhooks/subscriptions`
+
+Register a webhook subscription. Requires `webhook:subscribe` on the principal.
+
+**Request**
+| Field       | Type       | Required | Description |
+|-------------|------------|----------|-------------|
+| endpoint    | string     | yes      | URL to POST events to. |
+| eventTypes  | string[]   | yes      | Event types to subscribe to (e.g. `["message.appended"]`). |
+| streamId    | string     | no       | Restrict delivery to events on this stream. |
+
+**Response** `200` — `{ "subscriptionId": "...", "ok": true }`
+
+### `GET /v1/webhooks/subscriptions`
+
+List the principal's webhook subscriptions. Requires `webhook:read`.
+
+**Query**
+| Param            | Type    | Default | Description |
+|------------------|---------|---------|-------------|
+| includeDisabled  | boolean | `false` | Include disabled subscriptions. |
+
+**Response** `200` — `{ "subscriptions": [{ "id", "endpoint", "eventTypes", "streamId", "enabled", "createdAt" }] }`
+
+### `PATCH /v1/webhooks/subscriptions/:subscriptionId`
+
+Enable or disable a subscription.
+
+**Request**
+| Field    | Type    | Required | Description |
+|----------|---------|----------|-------------|
+| enabled  | boolean | yes      | `true` to enable, `false` to disable. |
+
+**Response** `200` — `{ "ok": true }`
 
 ## Clients
 

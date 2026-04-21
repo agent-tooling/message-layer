@@ -16,16 +16,25 @@ Non-goals:
 
 - Database schema, SQL, or storage engine details
 - Transport-level framing beyond HTTP+JSON
-- Client library ergonomics (terminal / Next.js clients have their own docs)
 
 ## Index
 
+### Core API
+
 - [concepts.md](./concepts.md) — resources, identifiers, lifecycle
-- [authentication.md](./authentication.md) — principals, scopes, providers
+- [authentication.md](./authentication.md) — principals, scopes, providers, API key gating
 - [authorization.md](./authorization.md) — grants and permission requests
-- [http-api.md](./http-api.md) — endpoint reference
+- [http-api.md](./http-api.md) — endpoint reference (core + plugin routes)
 - [events.md](./events.md) — event types and subscription semantics
 - [errors.md](./errors.md) — error model and status codes
+
+### Extensions
+
+- [plugins.md](./plugins.md) — plugin system: built-in plugins, options, authoring guide
+
+### Client SDK
+
+- [../sdk.md](../sdk.md) — TypeScript `MessageLayerClient` reference
 
 ## Versioning
 

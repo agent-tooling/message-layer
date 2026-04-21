@@ -12,10 +12,11 @@ All error responses are JSON with an `error` string field:
 |--------|-------------------------------------------------------------------------------------------|
 | `200`  | Success.                                                                                  |
 | `400`  | Validation error: malformed body, missing required field, invalid enum, etc.              |
-| `401`  | Missing or invalid `x-principal` header (or missing required API key when the host has configured key-based gating). |
+| `401`  | Missing or invalid `x-principal` header (or missing/incorrect API key when `api-key-header-auth` is active). |
 | `403`  | The principal is authenticated but lacks the required scope or grant, or attempted to access a private stream it is not a member of. |
 | `404`  | Referenced resource (channel, thread, message, grant, permission request) does not exist in the principal's org. |
 | `500`  | Unexpected server error.                                                                  |
+| `503`  | Server is misconfigured: `api-key-header-auth` is running in `strict` mode and `MESSAGE_LAYER_API_KEY` is not set. |
 
 Error payloads also carry a machine-friendly `code` field:
 
@@ -35,12 +36,14 @@ permission request without parsing the human-readable message.
 | Condition                                                        | Status |
 |------------------------------------------------------------------|--------|
 | `x-principal` header missing or malformed                        | `401`  |
+| API key header missing or incorrect (`api-key-header-auth` active) | `401` |
 | Principal's actor is not in the given `orgId`                    | `403`  |
 | Principal lacks a required capability (scope or grant)           | `403`  |
 | Required body field missing or wrong type                        | `400`  |
 | Unknown enum value (e.g. unsupported `streamType` or part type)  | `400`  |
 | Resolving a permission request that is not in `open` state       | `400`  |
 | `capability` query param missing on `GET /v1/grants/check`       | `400`  |
+| `api-key-header-auth` in strict mode with env var unset          | `503`  |
 
 ## Idempotency and errors
 
