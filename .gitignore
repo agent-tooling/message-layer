@@ -3,3 +3,4 @@ dist
 .pglite
 coverage
 *.log
+agents/**/.data/
