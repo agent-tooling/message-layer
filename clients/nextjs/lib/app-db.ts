@@ -32,6 +32,12 @@ CREATE TABLE IF NOT EXISTS user_actor_map (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_roles (
+  user_id TEXT PRIMARY KEY,
+  role TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS invites (
   token TEXT PRIMARY KEY,
   email TEXT NOT NULL,
@@ -63,6 +69,8 @@ export type UserActorRow = {
   display_name: string;
   created_at: string;
 };
+
+export type UserRole = "owner" | "admin" | "member";
 
 export type AttachmentRow = {
   id: string;
@@ -100,6 +108,34 @@ export function setUserActorMap(input: UserActorRow): void {
      VALUES (?,?,?,?,?)
      ON CONFLICT(user_id) DO UPDATE SET actor_id=excluded.actor_id,org_id=excluded.org_id,display_name=excluded.display_name`,
   ).run(input.user_id, input.actor_id, input.org_id, input.display_name, input.created_at);
+}
+
+export function getUserIdByActorId(actorId: string): string | null {
+  const row = sqlite
+    .prepare("SELECT user_id FROM user_actor_map WHERE actor_id=?")
+    .get(actorId) as { user_id: string } | undefined;
+  return row?.user_id ?? null;
+}
+
+export function getUserRole(userId: string): UserRole | null {
+  const row = sqlite
+    .prepare("SELECT role FROM user_roles WHERE user_id=?")
+    .get(userId) as { role: string } | undefined;
+  if (!row) return null;
+  if (row.role === "owner" || row.role === "admin" || row.role === "member") {
+    return row.role;
+  }
+  return null;
+}
+
+export function setUserRole(userId: string, role: UserRole): void {
+  sqlite
+    .prepare(
+      `INSERT INTO user_roles(user_id,role,updated_at)
+       VALUES (?,?,?)
+       ON CONFLICT(user_id) DO UPDATE SET role=excluded.role,updated_at=excluded.updated_at`,
+    )
+    .run(userId, role, new Date().toISOString());
 }
 
 export function createInvite(input: { token: string; email: string; role: string; inviterUserId: string; createdAt: string }): void {

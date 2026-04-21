@@ -13,7 +13,14 @@ type Message = {
   createdAt: string;
   parts: Array<{ type: string; payload: Record<string, unknown> }>;
 };
-type Member = { actorId: string; displayName: string; actorType: string };
+type Member = {
+  actorId: string;
+  displayName: string;
+  actorType: string;
+  role: string;
+  appRole: "owner" | "admin" | "member" | null;
+  effectiveCapabilities: string[];
+};
 type Attachment = { id: string; name: string; mimeType: string; sizeBytes: number; url: string };
 type ActorRow = { actorId: string; displayName: string; actorType: string; createdAt: string };
 type Thread = { id: string; parentMessageId: string; createdAt: string };
@@ -43,6 +50,7 @@ export function TeamWorkspace() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [newChannelName, setNewChannelName] = useState("");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [threadsByChannel, setThreadsByChannel] = useState<Record<string, Thread[]>>({});
@@ -243,10 +251,23 @@ export function TeamWorkspace() {
       const result = await api<{ inviteUrl: string }>("/api/team/invites", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email: inviteEmail }),
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
       });
       setInviteLink(result.inviteUrl);
       setInviteEmail("");
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function updateMemberRole(actorId: string, role: "admin" | "member") {
+    try {
+      await api(`/api/team/members/${actorId}/role`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ role }),
+      });
+      await refreshDirectory();
     } catch (err) {
       setError((err as Error).message);
     }
@@ -366,10 +387,37 @@ export function TeamWorkspace() {
               .filter((member) => member.actorType !== "agent")
               .map((member) => (
                 <li key={member.actorId} className="flex items-center justify-between gap-2">
-                  <span className="truncate">{member.displayName}</span>
-                  <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
-                    {member.actorType}
-                  </span>
+                  <div className="min-w-0">
+                    <span className="block truncate">{member.displayName}</span>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+                        {member.actorType}
+                      </span>
+                      {member.appRole ? (
+                        <span className="rounded bg-blue-950 px-2 py-0.5 text-[10px] uppercase tracking-wide text-blue-300">
+                          role:{member.appRole}
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="mt-1 truncate text-[10px] text-zinc-500">
+                      grants: {member.effectiveCapabilities.join(", ") || "none"}
+                    </p>
+                  </div>
+                  {member.appRole !== "owner" ? (
+                    <select
+                      className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-[10px] uppercase text-zinc-300"
+                      value={member.appRole ?? "member"}
+                      onChange={(event) =>
+                        void updateMemberRole(
+                          member.actorId,
+                          event.target.value === "admin" ? "admin" : "member",
+                        )
+                      }
+                    >
+                      <option value="member">member</option>
+                      <option value="admin">admin</option>
+                    </select>
+                  ) : null}
                 </li>
               ))}
             {members.filter((member) => member.actorType !== "agent").length === 0 ? (
@@ -386,6 +434,14 @@ export function TeamWorkspace() {
             value={inviteEmail}
             onChange={(event) => setInviteEmail(event.target.value)}
           />
+          <select
+            className="mt-2 w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-sm outline-none transition focus:border-emerald-500/70"
+            value={inviteRole}
+            onChange={(event) => setInviteRole(event.target.value === "admin" ? "admin" : "member")}
+          >
+            <option value="member">member</option>
+            <option value="admin">admin</option>
+          </select>
           <button
             className="mt-2 w-full rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900 transition hover:bg-white"
             onClick={createInvite}

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createInvite, listInvites } from "@/lib/app-db";
 import { env } from "@/lib/env";
+import { parseHumanRoleInput } from "@/lib/message-layer";
 import { requireSession } from "@/lib/server-auth";
 
 export async function GET(request: Request) {
@@ -18,14 +19,18 @@ export async function POST(request: Request) {
     const session = await requireSession(request.headers);
     const body = (await request.json()) as { email?: string; role?: string };
     const email = (body.email ?? "").trim().toLowerCase();
+    const requestedRole = parseHumanRoleInput(body.role ?? "member");
     if (!email) {
       return NextResponse.json({ error: "email is required" }, { status: 400 });
+    }
+    if (!requestedRole || requestedRole === "owner") {
+      return NextResponse.json({ error: "role must be admin or member" }, { status: 400 });
     }
     const token = randomUUID().replace(/-/g, "");
     createInvite({
       token,
       email,
-      role: body.role ?? "member",
+      role: requestedRole,
       inviterUserId: session.user.id,
       createdAt: new Date().toISOString(),
     });

@@ -1,6 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { env } from "@/lib/env";
-import { getSetting, getUserActorMap, hasConsumedInvite, setSetting, setUserActorMap } from "@/lib/app-db";
+import {
+  getSetting,
+  getUserActorMap,
+  getUserIdByActorId,
+  getUserRole,
+  hasConsumedInvite,
+  setSetting,
+  setUserActorMap,
+  setUserRole,
+  type UserRole,
+} from "@/lib/app-db";
 
 export type MlPrincipal = {
   actorId: string;
@@ -15,14 +25,40 @@ type MlSessionUser = {
   name: string | null;
 };
 
-const adminScopes = [
-  "channel:create",
-  "thread:create",
-  "message:append",
-  "grant:create",
-  "webhook:subscribe",
-  "webhook:read",
-];
+type MlResourceType = "org" | "channel" | "thread";
+type RoleGrantTemplate = {
+  capability: string;
+  resourceType: MlResourceType;
+  resourceId: string | null;
+};
+
+const defaultHumanScopes: string[] = [];
+const bootstrapScopes = ["channel:create", "grant:create"];
+const orgPlaceholder = "$org";
+
+const roleTemplates: Record<UserRole, RoleGrantTemplate[]> = {
+  owner: [
+    { capability: "message:append", resourceType: "channel", resourceId: null },
+    { capability: "message:append", resourceType: "thread", resourceId: null },
+    { capability: "thread:create", resourceType: "channel", resourceId: null },
+    { capability: "channel:create", resourceType: "org", resourceId: orgPlaceholder },
+    { capability: "grant:create", resourceType: "org", resourceId: orgPlaceholder },
+    { capability: "channel:admin", resourceType: "channel", resourceId: null },
+  ],
+  admin: [
+    { capability: "message:append", resourceType: "channel", resourceId: null },
+    { capability: "message:append", resourceType: "thread", resourceId: null },
+    { capability: "thread:create", resourceType: "channel", resourceId: null },
+    { capability: "channel:create", resourceType: "org", resourceId: orgPlaceholder },
+    { capability: "grant:create", resourceType: "org", resourceId: orgPlaceholder },
+    { capability: "channel:admin", resourceType: "channel", resourceId: null },
+  ],
+  member: [
+    { capability: "message:append", resourceType: "channel", resourceId: null },
+    { capability: "message:append", resourceType: "thread", resourceId: null },
+    { capability: "thread:create", resourceType: "channel", resourceId: null },
+  ],
+};
 
 // Next.js 16 / Turbopack can give each route handler chunk its own copy of
 // this module in dev mode. A module-scoped Map therefore does not dedupe
@@ -109,6 +145,109 @@ async function createActor(orgId: string, displayName: string, actorType: "human
   return created.actorId;
 }
 
+async function createGrant(
+  principal: MlPrincipal,
+  input: {
+    actorId: string;
+    resourceType: MlResourceType;
+    resourceId: string | null;
+    capability: string;
+  },
+): Promise<void> {
+  await mlRequest("/v1/grants", {
+    method: "POST",
+    principal,
+    body: {
+      actorId: input.actorId,
+      resourceType: input.resourceType,
+      resourceId: input.resourceId,
+      capability: input.capability,
+    },
+  });
+}
+
+async function revokeAllActorGrants(principal: MlPrincipal, actorId: string): Promise<void> {
+  await mlRequest(`/v1/actors/${actorId}/revoke-grants`, {
+    method: "POST",
+    principal,
+    body: { reason: "role reconciliation" },
+  });
+}
+
+async function ensureBootstrapPrincipal(orgId: string): Promise<MlPrincipal> {
+  const bootstrapActorIdKey = "bootstrap_actor_id";
+  const bootstrapActorOrgKey = "bootstrap_actor_org_id";
+  const existingActorId = getSetting(bootstrapActorIdKey);
+  const existingOrgId = getSetting(bootstrapActorOrgKey);
+  let actorId = existingActorId;
+  if (!actorId || existingOrgId !== orgId) {
+    actorId = await createActor(orgId, "Bootstrap System", "app");
+    setSetting(bootstrapActorIdKey, actorId);
+    setSetting(bootstrapActorOrgKey, orgId);
+  }
+  return {
+    actorId,
+    orgId,
+    scopes: bootstrapScopes,
+    provider: "bootstrap",
+  };
+}
+
+function resolveRole(input: string | null | undefined): UserRole {
+  if (input === "owner" || input === "admin" || input === "member") {
+    return input;
+  }
+  return "member";
+}
+
+export function parseHumanRoleInput(input: string | null | undefined): UserRole | null {
+  if (input === "owner" || input === "admin" || input === "member") {
+    return input;
+  }
+  return null;
+}
+
+function resolveRoleResourceId(resourceId: string | null, orgId: string): string | null {
+  if (resourceId === orgPlaceholder) {
+    return orgId;
+  }
+  return resourceId;
+}
+
+async function applyRoleGrants(input: {
+  grantor: MlPrincipal;
+  actorId: string;
+  orgId: string;
+  role: UserRole;
+}): Promise<void> {
+  await revokeAllActorGrants(input.grantor, input.actorId);
+  const template = roleTemplates[input.role];
+  for (const grant of template) {
+    await createGrant(input.grantor, {
+      actorId: input.actorId,
+      resourceType: grant.resourceType,
+      resourceId: resolveRoleResourceId(grant.resourceId, input.orgId),
+      capability: grant.capability,
+    });
+  }
+}
+
+async function reconcileUserRole(input: {
+  userId: string;
+  actorId: string;
+  orgId: string;
+  role: UserRole;
+}): Promise<void> {
+  const grantor = await ensureBootstrapPrincipal(input.orgId);
+  await applyRoleGrants({
+    grantor,
+    actorId: input.actorId,
+    orgId: input.orgId,
+    role: input.role,
+  });
+  setUserRole(input.userId, input.role);
+}
+
 export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrincipal> {
   const cached = inFlightPrincipalResolutions.get(user.id);
   if (cached) {
@@ -121,10 +260,22 @@ export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrinci
     // read but before this lock was acquired.
     const existing = getUserActorMap(user.id);
     if (existing) {
+      const firstUserId = getSetting("first_user_id");
+      const desiredRole = resolveRole(
+        getUserRole(user.id) ?? (firstUserId === user.id ? "owner" : "member"),
+      );
+      if (!getUserRole(user.id)) {
+        await reconcileUserRole({
+          userId: user.id,
+          actorId: existing.actor_id,
+          orgId: existing.org_id,
+          role: desiredRole,
+        });
+      }
       const principal: MlPrincipal = {
         actorId: existing.actor_id,
         orgId: existing.org_id,
-        scopes: adminScopes,
+        scopes: defaultHumanScopes,
         provider: "better-auth",
       };
       try {
@@ -171,10 +322,19 @@ export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrinci
     const principal: MlPrincipal = {
       actorId,
       orgId,
-      scopes: adminScopes,
+      scopes: defaultHumanScopes,
       provider: "better-auth",
     };
-    await ensureDefaultChannel(principal);
+    const desiredRole = resolveRole(
+      getUserRole(user.id) ?? (getSetting("first_user_id") === user.id ? "owner" : "member"),
+    );
+    await reconcileUserRole({
+      userId: user.id,
+      actorId,
+      orgId,
+      role: desiredRole,
+    });
+    await ensureDefaultChannel(await ensureBootstrapPrincipal(orgId));
     return principal;
   })();
 
@@ -188,19 +348,12 @@ export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrinci
 
 export async function getDefaultChannelId(): Promise<string> {
   const orgId = await ensureOrg();
-  const syntheticPrincipal: MlPrincipal = {
-    actorId: "bootstrap",
-    orgId,
-    scopes: adminScopes,
-    provider: "bootstrap",
-  };
+  const syntheticPrincipal = await ensureBootstrapPrincipal(orgId);
   const current = getSetting("default_channel_id");
   if (current && current.length > 0) {
     return current;
   }
-  const actorId = await createActor(orgId, "Bootstrap System", "app");
-  const principal = { ...syntheticPrincipal, actorId };
-  return ensureDefaultChannel(principal);
+  return ensureDefaultChannel(syntheticPrincipal);
 }
 
 export async function createAgentActor(orgId: string, displayName: string): Promise<string> {
@@ -233,6 +386,55 @@ export async function grantAgentCapability(input: {
   });
 }
 
+export async function checkActorCapability(
+  principal: MlPrincipal,
+  actorId: string,
+  capability: string,
+): Promise<boolean> {
+  const encodedActorId = encodeURIComponent(actorId);
+  const encodedCapability = encodeURIComponent(capability);
+  const result = await mlRequest<{ hasGrant: boolean }>(
+    `/v1/grants/check?actorId=${encodedActorId}&capability=${encodedCapability}`,
+    { principal },
+  );
+  return result.hasGrant;
+}
+
+export async function canManageRoles(principal: MlPrincipal): Promise<boolean> {
+  if (principal.scopes.includes("grant:create")) {
+    return true;
+  }
+  return checkActorCapability(principal, principal.actorId, "grant:create");
+}
+
+export async function setActorRole(actorId: string, role: UserRole): Promise<void> {
+  const userId = getUserIdByActorId(actorId);
+  if (!userId) {
+    throw new Error("cannot set role for actor that is not mapped to a signed-in user");
+  }
+  const actor = getUserActorMap(userId);
+  if (!actor) {
+    throw new Error("user actor mapping not found");
+  }
+  await reconcileUserRole({
+    userId,
+    actorId: actor.actor_id,
+    orgId: actor.org_id,
+    role,
+  });
+}
+
+export async function setUserRoleForPrincipal(user: MlSessionUser, role: UserRole): Promise<MlPrincipal> {
+  const principal = await ensureUserPrincipal(user);
+  await reconcileUserRole({
+    userId: user.id,
+    actorId: principal.actorId,
+    orgId: principal.orgId,
+    role,
+  });
+  return principal;
+}
+
 export async function listChannels(principal: MlPrincipal): Promise<Array<{ id: string; name: string; visibility: string }>> {
   const result = await mlRequest<{ channels: Array<{ id: string; name: string; visibility: string }> }>("/v1/channels", {
     principal,
@@ -240,9 +442,11 @@ export async function listChannels(principal: MlPrincipal): Promise<Array<{ id: 
   return result.channels;
 }
 
-export async function listMembers(principal: MlPrincipal): Promise<Array<{ actorId: string; displayName: string; actorType: string }>> {
+export async function listMembers(
+  principal: MlPrincipal,
+): Promise<Array<{ actorId: string; displayName: string; actorType: string; role: string }>> {
   const result = await mlRequest<{
-    members: Array<{ actorId: string; displayName: string; actorType: string }>;
+    members: Array<{ actorId: string; displayName: string; actorType: string; role: string }>;
   }>("/v1/members", { principal });
   return result.members;
 }
