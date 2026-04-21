@@ -12,7 +12,7 @@ import {
   type PluginLogger,
 } from "./plugins.js";
 import { MessageLayer, type MessageLayerService } from "./service.js";
-import { createStorageAdapter, type StorageAdapter } from "./storage.js";
+import { createStorageAdapter, type StorageAdapter, type StorageConfig } from "./storage.js";
 import { attachWebSocketServer, type WebSocketServerHandle } from "./ws.js";
 
 export interface StartServerOptions {
@@ -40,6 +40,20 @@ export interface RunningServer {
 }
 
 /**
+ * Resolves a storage adapter from config, handling S3 via dynamic import so
+ * `@aws-sdk/client-s3` is only loaded when actually needed.
+ */
+async function resolveStorageAdapter(config: StorageConfig): Promise<StorageAdapter> {
+  if (config.kind === "s3") {
+    const { S3StorageAdapter } = await import("./storage/s3.js");
+    if (!config.s3Options) throw new Error("artifacts.s3Options is required for kind='s3'");
+    // s3Options is narrowed at the call site (via s3() factory or manual config)
+    return new S3StorageAdapter(config.s3Options as never);
+  }
+  return createStorageAdapter(config);
+}
+
+/**
  * Boots a full message-layer server in-process: DB, service, HTTP app,
  * plugins, optional WebSocket transport. Returns a handle that shuts the
  * whole thing down cleanly.
@@ -54,7 +68,7 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
   const db = options.db ?? (await connect(config.storage.path, config.storage.adapter));
   const bus = new InProcessEventBus((m) => logger(`[event-bus] ${m}`));
-  const storage = options.storage ?? createStorageAdapter(config.artifacts);
+  const storage = options.storage ?? (await resolveStorageAdapter(config.artifacts));
   const service = new MessageLayer(db, { bus, storage, maxArtifactBytes: config.artifacts.maxBytes });
 
   const app = createApp(service);

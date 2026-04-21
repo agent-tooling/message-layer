@@ -127,9 +127,15 @@ new MessageLayerClient({ ..., apiKey: "...", apiKeyHeader: "x-ml-secret" })
 | `PORT` | `3000` | HTTP listen port |
 | `STORAGE_ADAPTER` | `pglite` | `pglite` or `postgres` |
 | `STORAGE_PATH` | `memory://server` | PGlite path or Postgres connection string |
-| `ARTIFACTS_STORAGE` | `local-fs` | `local-fs` or `memory` |
-| `ARTIFACTS_PATH` | `./.data/artifacts` | Blob storage directory (local-fs only) |
+| `ARTIFACTS_STORAGE` | `local-fs` | `local-fs`, `memory`, or `s3` |
+| `ARTIFACTS_PATH` | `./.data/artifacts` | Blob storage directory (`local-fs` only) |
 | `ARTIFACTS_MAX_BYTES` | `10485760` (10 MB) | Max artifact size in bytes |
+| `ARTIFACTS_S3_BUCKET` | _(required for s3)_ | S3 bucket name |
+| `ARTIFACTS_S3_REGION` | `us-east-1` | S3 / AWS region |
+| `ARTIFACTS_S3_ENDPOINT` | _(none)_ | Custom endpoint (MinIO, R2, localstack) |
+| `ARTIFACTS_S3_FORCE_PATH_STYLE` | `true` when endpoint is set | Force path-style URLs |
+| `ARTIFACTS_S3_ACCESS_KEY_ID` | _(AWS credential chain)_ | Static access key ID |
+| `ARTIFACTS_S3_SECRET_ACCESS_KEY` | _(AWS credential chain)_ | Static secret access key |
 | `PLUGINS` | _(none)_ | Comma-separated plugin names, e.g. `request-logging,webhooks` |
 | `ENABLE_WEBSOCKET` | `true` | Enable WebSocket upgrade |
 | `MESSAGE_LAYER_API_KEY` | _(none)_ | Shared secret for `api-key-header-auth` plugin |
@@ -316,12 +322,37 @@ Persists message-derived knowledge entries per stream. Every `message.appended` 
 - Adds `POST /v1/knowledge/:id/promote` — promote an entry org-wide (requires `knowledge:promote`)
 
 #### `durable-streams`
-Append-only named streams with optional TTL, consumer checkpoints, and tail-read SSE. Useful for agent task queues and async pipelines.
+Append-only named streams with optional TTL, consumer checkpoints, and tail-read SSE. Useful for agent task queues and async pipelines. Chunk data is stored in SQL rows.
 
 - Adds `POST /v1/durable-streams` — create stream
 - Adds `GET /v1/durable-streams/:id` — read / tail stream
 - Adds `POST /v1/durable-streams/:id/commit` — commit checkpoint
 - Adds `POST /v1/durable-streams/:id/close` — close stream
+
+#### `durable-streams-storage`
+Storage-backed variant of `durable-streams`. Chunk data is written to the blob `StorageAdapter` (memory / local-fs / **S3**) rather than SQL rows, keeping the DB lean for large payloads (streaming LLM output, log tails, binary frames, etc.).
+
+Uses the same storage adapter that backs artifacts — configure S3 for artifacts and durable-streams-storage automatically uses S3.
+
+- Adds `POST /v1/durable-streams-storage` — create stream
+- Adds `GET /v1/durable-streams-storage/:id/head` — metadata
+- Adds `POST /v1/durable-streams-storage/:id/chunks` — append chunk(s) → stored in StorageAdapter
+- Adds `GET /v1/durable-streams-storage/:id/read` — batch-read chunks from storage
+- Adds `GET /v1/durable-streams-storage/:id/tail` — SSE live tail
+- Adds `POST /v1/durable-streams-storage/:id/close` — close + write manifest
+- Adds `POST /v1/durable-streams-storage/:id/commit` — assemble + post as a single channel message
+
+```typescript
+import { durableStreamsStoragePlugin } from "message-layer/plugins/durable-streams-storage";
+import { s3 } from "message-layer/storage/s3";
+
+await startServer({
+  config: {
+    artifacts: s3({ bucket: "my-bucket", region: "us-east-1" }),
+  },
+  plugins: [durableStreamsStoragePlugin()],
+});
+```
 
 #### `in-memory-knowledge` _(legacy)_
 Lightweight in-memory message index. Use `scoped-knowledge` for production; this plugin is retained for plugin-authoring examples and tests.

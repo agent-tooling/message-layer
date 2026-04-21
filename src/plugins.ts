@@ -12,6 +12,7 @@ import { requestLoggingPluginFactory } from "./plugins/request-logging.js";
 import { scopedKnowledgePlugin } from "./plugins/scoped-knowledge.js";
 import { webhookPlugin } from "./plugins/webhooks.js";
 import { websocketPluginFactory } from "./plugins/websocket.js";
+import { durableStreamsStoragePlugin } from "./plugins/durable-streams-storage.js";
 import type { DomainEvent } from "./types.js";
 
 export type PluginLogger = (message: string) => unknown;
@@ -66,6 +67,7 @@ export const builtInPluginFactories: Record<string, PluginFactory> = {
   "scoped-knowledge": scopedKnowledgePlugin,
   webhooks: webhookPlugin,
   "durable-streams": durableStreamsPlugin,
+  "durable-streams-storage": durableStreamsStoragePlugin,
   websocket: websocketPluginFactory,
 };
 

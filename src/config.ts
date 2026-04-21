@@ -60,9 +60,9 @@ function parseBool(value: string | undefined, fallback: boolean): boolean {
 
 function parseArtifactsStorageKind(value: string | undefined): StorageKind {
   if (!value) return "local-fs";
-  if (value === "memory" || value === "local-fs") return value;
+  if (value === "memory" || value === "local-fs" || value === "s3") return value;
   throw new Error(
-    `unsupported ARTIFACTS_STORAGE: ${value}. Supported: memory, local-fs`,
+    `unsupported ARTIFACTS_STORAGE: ${value}. Supported: memory, local-fs, s3`,
   );
 }
 
@@ -73,6 +73,28 @@ function defaultArtifactsConfig(env: NodeJS.ProcessEnv): StorageConfig {
     : DEFAULT_ARTIFACT_MAX_BYTES;
   if (kind === "memory") {
     return { kind, maxBytes };
+  }
+  if (kind === "s3") {
+    const bucket = env.ARTIFACTS_S3_BUCKET;
+    if (!bucket) throw new Error("ARTIFACTS_S3_BUCKET is required when ARTIFACTS_STORAGE=s3");
+    return {
+      kind: "s3",
+      maxBytes,
+      s3Options: {
+        bucket,
+        region: env.ARTIFACTS_S3_REGION ?? env.AWS_REGION ?? "us-east-1",
+        endpoint: env.ARTIFACTS_S3_ENDPOINT ?? env.S3_ENDPOINT,
+        forcePathStyle: env.ARTIFACTS_S3_FORCE_PATH_STYLE === "true" || !!env.ARTIFACTS_S3_ENDPOINT,
+        credentials:
+          env.ARTIFACTS_S3_ACCESS_KEY_ID && env.ARTIFACTS_S3_SECRET_ACCESS_KEY
+            ? {
+                accessKeyId: env.ARTIFACTS_S3_ACCESS_KEY_ID,
+                secretAccessKey: env.ARTIFACTS_S3_SECRET_ACCESS_KEY,
+                sessionToken: env.ARTIFACTS_S3_SESSION_TOKEN,
+              }
+            : undefined,
+      },
+    };
   }
   return {
     kind: "local-fs",
@@ -125,6 +147,7 @@ export function parseServerConfig(
     ? {
         kind: parseArtifactsStorageKind(artifactsRaw.kind),
         basePath: artifactsRaw.basePath ?? defaults.artifacts.basePath,
+        s3Options: (artifactsRaw as StorageConfig).s3Options ?? (defaults.artifacts as StorageConfig).s3Options,
         maxBytes: artifactsRaw.maxBytes ?? defaults.artifacts.maxBytes,
       }
     : defaults.artifacts;

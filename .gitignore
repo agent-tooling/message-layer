@@ -4,3 +4,5 @@ dist
 coverage
 *.log
 agents/**/.data/
+# reference repos (sparse clones, not tracked)
+references/electric/

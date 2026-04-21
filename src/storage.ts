@@ -17,7 +17,7 @@ import { dirname, join, resolve } from "node:path";
  * `ServerConfig.artifacts`.
  */
 
-export type StorageKind = "memory" | "local-fs";
+export type StorageKind = "memory" | "local-fs" | "s3";
 
 export interface StoredObject {
   content: Buffer;
@@ -117,6 +117,11 @@ export interface StorageConfig {
   kind: StorageKind;
   /** Required when kind === "local-fs". Absolute or relative path. */
   basePath?: string;
+  /**
+   * S3 options required when kind === "s3".
+   * See `S3StorageOptions` in `message-layer/storage/s3`.
+   */
+  s3Options?: Record<string, unknown>;
   /** Maximum artifact size in bytes. Defaults to 10 MB. */
   maxBytes?: number;
 }
@@ -128,6 +133,16 @@ export function createStorageAdapter(config: StorageConfig): StorageAdapter {
   if (config.kind === "local-fs") {
     if (!config.basePath) throw new Error("artifacts.basePath is required for local-fs");
     return new LocalFileSystemStorageAdapter(config.basePath);
+  }
+  if (config.kind === "s3") {
+    // S3 is handled by the server-runtime which does a dynamic import so that
+    // `@aws-sdk/client-s3` is not loaded for memory/local-fs deployments.
+    // Reaching here from createStorageAdapter directly means the caller
+    // bypassed the runtime — we raise a helpful error.
+    throw new Error(
+      "S3 storage must be configured via startServer() or createS3StorageAdapter(). " +
+        "Import S3StorageAdapter from 'message-layer/storage/s3'.",
+    );
   }
   throw new Error(`unsupported storage kind: ${config.kind as string}`);
 }

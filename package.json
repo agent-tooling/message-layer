@@ -26,6 +26,10 @@
       "import": "./dist/plugins/durable-streams.js",
       "types": "./dist/plugins/durable-streams.d.ts"
     },
+    "./plugins/durable-streams-storage": {
+      "import": "./dist/plugins/durable-streams-storage.js",
+      "types": "./dist/plugins/durable-streams-storage.d.ts"
+    },
     "./plugins/event-logger": {
       "import": "./dist/plugins/event-logger.js",
       "types": "./dist/plugins/event-logger.d.ts"
@@ -61,6 +65,10 @@
     "./storage/postgres": {
       "import": "./dist/storage/postgres.js",
       "types": "./dist/storage/postgres.d.ts"
+    },
+    "./storage/s3": {
+      "import": "./dist/storage/s3.js",
+      "types": "./dist/storage/s3.d.ts"
     }
   },
   "files": [
@@ -84,6 +92,7 @@
     "agent:assistant:once": "pnpm --dir agents/assistant run once"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1030.0",
     "@electric-sql/pglite": "0.3.11",
     "@hono/node-server": "1.14.4",
     "@mariozechner/pi-ai": "0.66.1",
