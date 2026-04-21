@@ -66,6 +66,19 @@ const clientBody = z.object({
   endpoint: z.string().min(1),
   metadata: z.record(z.unknown()).optional(),
 });
+const registerArtifactBody = z.object({
+  streamId: z.string().min(1),
+  streamType: streamTypeSchema,
+  filename: z.string().min(1),
+  contentType: z.string().min(1),
+  /**
+   * Base64-encoded bytes. JSON-only API keeps the HTTP surface uniform; bulk
+   * uploads that need streaming should call the service directly or front
+   * this with a signed-URL workflow in a plugin.
+   */
+  contentBase64: z.string().min(1),
+  sha256: z.string().optional(),
+});
 
 function parsePrincipal(headerValue: string | undefined): Principal | null {
   if (!headerValue) return null;
@@ -104,6 +117,14 @@ function handleError(c: Context, error: unknown): Response {
     return c.json({ error: error.message, code: "ERROR" }, 400);
   }
   return c.json({ error: "unexpected error", code: "ERROR" }, 500);
+}
+
+function encodeFilename(name: string): string {
+  // Strip control characters / quotes to keep the Content-Disposition header
+  // well-formed. Clients see the sanitized name; the raw name lives in the
+  // artifact metadata.
+  // eslint-disable-next-line no-control-regex
+  return name.replace(/[\x00-\x1f"\\]/g, "_");
 }
 
 async function parseJsonBody<T>(c: Context, schema: z.ZodType<T>): Promise<T> {
@@ -418,6 +439,88 @@ export function createApp(service: MessageLayerService): Hono {
         body.notes ?? "",
       );
       return c.json({ ok: true, ...result });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  // artifacts
+  app.post("/v1/artifacts", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const body = await parseJsonBody(c, registerArtifactBody);
+      let content: Buffer;
+      try {
+        content = Buffer.from(body.contentBase64, "base64");
+      } catch {
+        throw new ValidationError("contentBase64 is not valid base64");
+      }
+      if (content.byteLength === 0) throw new ValidationError("contentBase64 decoded to zero bytes");
+      const record = await service.registerArtifact(auth.principal, {
+        streamId: body.streamId,
+        streamType: body.streamType,
+        filename: body.filename,
+        contentType: body.contentType,
+        content,
+        sha256: body.sha256,
+      });
+      return c.json({ artifact: record });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.get("/v1/artifacts/:artifactId", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const record = await service.getArtifactMetadata(auth.principal, c.req.param("artifactId"));
+      return c.json({ artifact: record });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.get("/v1/artifacts/:artifactId/content", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const { metadata, content } = await service.downloadArtifact(auth.principal, c.req.param("artifactId"));
+      const headers = new Headers({
+        "content-type": metadata.contentType,
+        "content-length": String(metadata.size),
+        "content-disposition": `attachment; filename="${encodeFilename(metadata.filename)}"`,
+        "x-artifact-id": metadata.id,
+        "x-artifact-sha256": metadata.sha256,
+      });
+      return new Response(new Uint8Array(content), { status: 200, headers });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.get("/v1/streams/:streamId/artifacts", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const includeDeleted = c.req.query("includeDeleted") === "true";
+      const artifacts = await service.listArtifacts(auth.principal, c.req.param("streamId"), {
+        includeDeleted,
+      });
+      return c.json({ artifacts });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.delete("/v1/artifacts/:artifactId", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const reason = c.req.query("reason") ?? "";
+      await service.deleteArtifact(auth.principal, c.req.param("artifactId"), reason);
+      return c.json({ ok: true });
     } catch (e) {
       return handleError(c, e);
     }

@@ -249,6 +249,89 @@ See [authorization.md](./authorization.md) for semantics.
 - `GET /v1/permission-requests?actorId` → `{ requests: [...] }`
 - `POST /v1/permission-requests/:requestId/resolve` — `{ approve, notes? }` → `{ ok: true }`
 
+## Artifacts
+
+Artifacts are binary payloads scoped to a stream (channel or thread). Core
+stores only metadata in SQL; the bytes go through a pluggable blob
+`StorageAdapter` (default: local filesystem under `./.data/artifacts`). See
+[concepts.md](./concepts.md) for privacy rules.
+
+### `POST /v1/artifacts`
+
+Register a new artifact. Requires `artifact:register` **or** `message:append`
+on the target stream, plus read access to that stream (channel membership for
+private channels).
+
+**Request**
+| Field          | Type                      | Required | Description |
+|----------------|---------------------------|----------|-------------|
+| streamId       | string                    | yes      | Channel or thread id. |
+| streamType     | `"channel"` \| `"thread"` | yes      | Discriminates the stream kind. |
+| filename       | string                    | yes      | Original filename; surfaced in `Content-Disposition` on download. |
+| contentType    | string                    | yes      | MIME type. |
+| contentBase64  | string                    | yes      | Raw bytes, base64-encoded. Must decode to `> 0` bytes and `≤ artifacts.maxBytes` (default 10 MB). |
+| sha256         | string                    | no       | Optional hex digest. Validated against server-computed digest. |
+
+**Response** `200`
+```json
+{ "artifact": {
+  "id": "...", "orgId": "...", "streamId": "...", "streamType": "channel",
+  "filename": "hi.txt", "contentType": "text/plain", "size": 15,
+  "sha256": "...", "storageKind": "local-fs",
+  "createdByActorId": "...", "createdAt": "...",
+  "deleted": false, "deletedAt": null, "deletedByActorId": null
+}}
+```
+
+### `GET /v1/artifacts/:artifactId`
+
+Artifact metadata. Requires read access to the owning stream.
+
+**Response** `200` — same `{ "artifact": ArtifactRecord }` shape as above.
+
+### `GET /v1/artifacts/:artifactId/content`
+
+Binary download. Requires read access to the owning stream. Deleted
+artifacts return `404`.
+
+**Response** `200`
+- body: raw bytes
+- `Content-Type`: the artifact's stored MIME type
+- `Content-Length`: stored byte size
+- `Content-Disposition`: `attachment; filename="<filename>"` (sanitized)
+- `x-artifact-id`, `x-artifact-sha256`: convenience headers for clients that
+  want to verify the download.
+
+### `GET /v1/streams/:streamId/artifacts`
+
+List artifacts belonging to a stream, oldest first. Hides soft-deleted
+artifacts by default.
+
+**Query**
+| Param           | Type    | Default | Description |
+|-----------------|---------|---------|-------------|
+| includeDeleted  | boolean | `false` | When `true`, returns tombstones too (`deleted: true`). |
+
+**Response** `200` — `{ "artifacts": ArtifactRecord[] }`
+
+### `DELETE /v1/artifacts/:artifactId`
+
+Soft-delete an artifact. Allowed for the original uploader, for principals
+with the `artifact:admin` scope, or for principals holding an
+`artifact:admin` grant on the owning stream. Emits `artifact.deleted`.
+
+**Query**
+| Param   | Type   | Default | Description |
+|---------|--------|---------|-------------|
+| reason  | string | `""`    | Free-form reason attached to the `artifact.deleted` event. |
+
+**Response** `200` — `{ "ok": true }`
+
+Artifacts referenced from message parts (`{ "type": "artifact", "payload": { "artifactId": "..." } }`)
+are the recommended way to attach files to conversations; messages stay
+small and bytes stay behind the permissioned `GET /v1/artifacts/:id/content`
+endpoint.
+
 ## Clients
 
 ### `POST /v1/clients`

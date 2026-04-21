@@ -2,6 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import type { DbClient, SqlDatabase } from "./db.js";
 import { InProcessEventBus, type EventBus } from "./event-bus.js";
 import {
+  DEFAULT_ARTIFACT_MAX_BYTES,
+  deriveStorageKey,
+  InMemoryStorageAdapter,
+  type StorageAdapter,
+} from "./storage.js";
+import {
   NotFoundError,
   PermissionError,
   ValidationError,
@@ -38,6 +44,7 @@ const EVENT_TYPES = [
   "permission_request.resolved",
   "privacy_policy.updated",
   "artifact.registered",
+  "artifact.deleted",
   "knowledge.promoted",
   "audit.logged",
   "client.registered",
@@ -69,6 +76,47 @@ export interface MessageLayerOptions {
   bus?: EventBus;
   now?: () => Date;
   id?: () => string;
+  /**
+   * Blob storage for artifacts. Defaults to `InMemoryStorageAdapter` so unit
+   * tests and short-lived scripts work with zero configuration. Production
+   * deployments pass `LocalFileSystemStorageAdapter` or an external (S3)
+   * implementation via `server-runtime.ts`.
+   */
+  storage?: StorageAdapter;
+  /** Hard cap on artifact byte size. Defaults to 10 MB. */
+  maxArtifactBytes?: number;
+}
+
+export interface RegisterArtifactInput {
+  streamId: string;
+  streamType: StreamType;
+  filename: string;
+  contentType: string;
+  content: Buffer;
+  /** Optional pre-computed sha256 hex. Recomputed and validated server-side. */
+  sha256?: string;
+}
+
+export interface ArtifactRecord {
+  id: string;
+  orgId: string;
+  streamId: string;
+  streamType: StreamType;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  storageKind: string;
+  createdByActorId: string;
+  createdAt: string;
+  deleted: boolean;
+  deletedAt: string | null;
+  deletedByActorId: string | null;
+}
+
+export interface ArtifactContent {
+  metadata: ArtifactRecord;
+  content: Buffer;
 }
 
 export interface AppendMessageInput {
@@ -104,11 +152,15 @@ export type AppendMessageResult = AppendMessageSuccess | AppendMessageDenied;
 
 export class MessageLayer {
   public readonly bus: EventBus;
+  public readonly storage: StorageAdapter;
+  public readonly maxArtifactBytes: number;
   private readonly now: () => Date;
   private readonly idFn: () => string;
 
   constructor(public readonly db: SqlDatabase, opts: MessageLayerOptions = {}) {
     this.bus = opts.bus ?? new InProcessEventBus();
+    this.storage = opts.storage ?? new InMemoryStorageAdapter();
+    this.maxArtifactBytes = opts.maxArtifactBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
     this.now = opts.now ?? (() => new Date());
     this.idFn = opts.id ?? (() => randomUUID().replace(/-/g, ""));
   }
@@ -1095,6 +1147,242 @@ export class MessageLayer {
       resourceId: r.resource_id,
       createdAt: r.created_at,
     }));
+  }
+
+  // ── artifacts ────────────────────────────────────────────────────────────
+
+  /**
+   * Register a new artifact in a stream. Bytes are persisted through the
+   * configured `StorageAdapter`; only metadata lands in SQL (AGENTS.md rule
+   * #14). Privacy is enforced against the target stream and the caller must
+   * hold `artifact:register` on that stream, or already be allowed to append
+   * messages to it (`message:append`).
+   */
+  async registerArtifact(
+    principal: Principal,
+    input: RegisterArtifactInput,
+  ): Promise<ArtifactRecord> {
+    await this.assertOrgActor(principal);
+    const streamType = streamTypeSchema.parse(input.streamType);
+    if (!input.streamId) throw new ValidationError("streamId is required");
+    if (!input.filename) throw new ValidationError("filename is required");
+    if (!input.contentType) throw new ValidationError("contentType is required");
+    if (!Buffer.isBuffer(input.content)) throw new ValidationError("content must be a Buffer");
+    if (input.content.byteLength === 0) throw new ValidationError("content must be non-empty");
+    if (input.content.byteLength > this.maxArtifactBytes) {
+      throw new ValidationError(
+        `content exceeds maxArtifactBytes (${input.content.byteLength} > ${this.maxArtifactBytes})`,
+      );
+    }
+
+    await this.assertStreamReadable(principal, input.streamId, streamType);
+
+    const allowed =
+      (await this.hasGrant(principal, "artifact:register", streamType, input.streamId)) ||
+      (await this.hasGrant(principal, "message:append", streamType, input.streamId));
+    if (!allowed) {
+      throw new PermissionError("missing artifact:register", {
+        capability: "artifact:register",
+        resourceType: streamType,
+        resourceId: input.streamId,
+      });
+    }
+
+    const computedSha = createHash("sha256").update(input.content).digest("hex");
+    if (input.sha256 && input.sha256.toLowerCase() !== computedSha) {
+      throw new ValidationError("sha256 mismatch with provided content");
+    }
+
+    const artifactId = this.id();
+    const storageKey = deriveStorageKey(principal.orgId, artifactId);
+    const createdAt = this.ts();
+    const size = input.content.byteLength;
+
+    // Write bytes before committing metadata so a DB failure can't leave a
+    // dangling SQL row pointing at missing content. Blob orphans are
+    // tolerable (and garbage-collectable); missing blobs are not.
+    await this.storage.put(storageKey, input.content, { contentType: input.contentType });
+
+    try {
+      const event = await this.db.tx(async (tx) => {
+        await this.txQuery(
+          tx,
+          `INSERT INTO artifacts(
+             id,org_id,stream_id,stream_type,storage_kind,storage_key,
+             filename,content_type,size,sha256,created_by_actor_id,created_at,deleted
+           ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+          [
+            artifactId,
+            principal.orgId,
+            input.streamId,
+            streamType,
+            this.storage.kind,
+            storageKey,
+            input.filename,
+            input.contentType,
+            size,
+            computedSha,
+            principal.actorId,
+            createdAt,
+          ],
+        );
+        return this.emit(tx, {
+          orgId: principal.orgId,
+          streamId: input.streamId,
+          eventType: "artifact.registered",
+          payload: {
+            orgId: principal.orgId,
+            artifactId,
+            streamId: input.streamId,
+            streamType,
+            filename: input.filename,
+            contentType: input.contentType,
+            size,
+            sha256: computedSha,
+            createdByActorId: principal.actorId,
+          },
+        });
+      });
+      this.bus.publish(event);
+    } catch (error) {
+      // Best-effort cleanup of the just-written blob if the metadata insert
+      // failed. Swallow adapter errors during cleanup — the original failure
+      // is the one the caller needs to see.
+      await this.storage.delete(storageKey).catch(() => {});
+      throw error;
+    }
+
+    return {
+      id: artifactId,
+      orgId: principal.orgId,
+      streamId: input.streamId,
+      streamType,
+      filename: input.filename,
+      contentType: input.contentType,
+      size,
+      sha256: computedSha,
+      storageKind: this.storage.kind,
+      createdByActorId: principal.actorId,
+      createdAt,
+      deleted: false,
+      deletedAt: null,
+      deletedByActorId: null,
+    };
+  }
+
+  async getArtifactMetadata(principal: Principal, artifactId: string): Promise<ArtifactRecord> {
+    await this.assertOrgActor(principal);
+    const row = await this.loadArtifactRow(principal.orgId, artifactId);
+    await this.assertStreamReadable(principal, row.streamId, row.streamType);
+    return row;
+  }
+
+  async downloadArtifact(principal: Principal, artifactId: string): Promise<ArtifactContent> {
+    await this.assertOrgActor(principal);
+    const row = await this.loadArtifactRow(principal.orgId, artifactId);
+    await this.assertStreamReadable(principal, row.streamId, row.streamType);
+    if (row.deleted) {
+      throw new NotFoundError(`artifact deleted: ${artifactId}`);
+    }
+    const blob = await this.storage.get(this.artifactStorageKey(row));
+    if (!blob) {
+      throw new NotFoundError(`artifact content missing: ${artifactId}`);
+    }
+    return { metadata: row, content: blob.content };
+  }
+
+  async listArtifacts(
+    principal: Principal,
+    streamId: string,
+    options: { streamType?: StreamType; includeDeleted?: boolean } = {},
+  ): Promise<ArtifactRecord[]> {
+    const streamType = options.streamType ?? (await this.inferStreamType(streamId));
+    await this.assertStreamReadable(principal, streamId, streamType);
+    const includeDeleted = options.includeDeleted === true;
+    const rows = await this.query<DbRow>(
+      `SELECT id,org_id,stream_id,stream_type,storage_kind,storage_key,filename,content_type,size,sha256,
+              created_by_actor_id,created_at,deleted,deleted_at,deleted_by_actor_id
+       FROM artifacts WHERE org_id=? AND stream_id=? ${includeDeleted ? "" : "AND deleted=0"}
+       ORDER BY created_at ASC`,
+      [principal.orgId, streamId],
+    );
+    return rows.map((r) => this.mapArtifactRow(r));
+  }
+
+  async deleteArtifact(principal: Principal, artifactId: string, reason = ""): Promise<void> {
+    await this.assertOrgActor(principal);
+    const row = await this.loadArtifactRow(principal.orgId, artifactId);
+    if (row.deleted) return;
+    const allowed =
+      row.createdByActorId === principal.actorId ||
+      principal.scopes.includes("artifact:admin") ||
+      (await this.hasGrant(principal, "artifact:admin", row.streamType, row.streamId));
+    if (!allowed) {
+      throw new PermissionError("missing artifact:admin", {
+        capability: "artifact:admin",
+        resourceType: row.streamType,
+        resourceId: row.streamId,
+      });
+    }
+    const deletedAt = this.ts();
+    const event = await this.db.tx(async (tx) => {
+      await this.txQuery(
+        tx,
+        "UPDATE artifacts SET deleted=1, deleted_at=?, deleted_by_actor_id=? WHERE id=? AND org_id=?",
+        [deletedAt, principal.actorId, artifactId, principal.orgId],
+      );
+      return this.emit(tx, {
+        orgId: principal.orgId,
+        streamId: row.streamId,
+        eventType: "artifact.deleted",
+        payload: {
+          orgId: principal.orgId,
+          artifactId,
+          streamId: row.streamId,
+          streamType: row.streamType,
+          deletedAt,
+          deletedByActorId: principal.actorId,
+          reason,
+        },
+      });
+    });
+    // Bytes go away on hard-delete elsewhere; soft delete keeps them for now
+    // so audit + verification stays consistent. Storage GC is a follow-up.
+    this.bus.publish(event);
+  }
+
+  private async loadArtifactRow(orgId: string, artifactId: string): Promise<ArtifactRecord> {
+    const row = await this.queryOne<DbRow>(
+      `SELECT id,org_id,stream_id,stream_type,storage_kind,storage_key,filename,content_type,size,sha256,
+              created_by_actor_id,created_at,deleted,deleted_at,deleted_by_actor_id
+       FROM artifacts WHERE id=? AND org_id=?`,
+      [artifactId, orgId],
+    );
+    if (!row) throw new NotFoundError(`artifact not found: ${artifactId}`);
+    return this.mapArtifactRow(row);
+  }
+
+  private mapArtifactRow(row: DbRow): ArtifactRecord {
+    return {
+      id: String(row.id),
+      orgId: String(row.org_id),
+      streamId: String(row.stream_id),
+      streamType: streamTypeSchema.parse(row.stream_type),
+      filename: String(row.filename),
+      contentType: String(row.content_type),
+      size: Number(row.size),
+      sha256: String(row.sha256),
+      storageKind: String(row.storage_kind),
+      createdByActorId: String(row.created_by_actor_id),
+      createdAt: String(row.created_at),
+      deleted: Number(row.deleted) === 1,
+      deletedAt: (row.deleted_at as string | null) ?? null,
+      deletedByActorId: (row.deleted_by_actor_id as string | null) ?? null,
+    };
+  }
+
+  private artifactStorageKey(row: ArtifactRecord): string {
+    return deriveStorageKey(row.orgId, row.id);
   }
 
   // ── audit ────────────────────────────────────────────────────────────────

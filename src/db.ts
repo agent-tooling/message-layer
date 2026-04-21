@@ -134,6 +134,24 @@ CREATE TABLE IF NOT EXISTS clients (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS artifacts (
+  id TEXT PRIMARY KEY,
+  org_id TEXT NOT NULL,
+  stream_id TEXT NOT NULL,
+  stream_type TEXT NOT NULL CHECK (stream_type IN ('channel', 'thread')),
+  storage_kind TEXT NOT NULL,
+  storage_key TEXT NOT NULL,
+  filename TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  created_by_actor_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  deleted INTEGER NOT NULL DEFAULT 0,
+  deleted_at TEXT,
+  deleted_by_actor_id TEXT
+);
+
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
   org_id TEXT NOT NULL,
@@ -161,10 +179,11 @@ CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_events(org_id, audit_seq);
 CREATE INDEX IF NOT EXISTS idx_memberships_actor ON memberships(org_id, actor_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_channel ON memberships(org_id, channel_id);
+CREATE INDEX IF NOT EXISTS idx_artifacts_stream ON artifacts(org_id, stream_id);
 `;
 
 export type SqlValue = string | number | null;
-export type StorageAdapter = "pglite";
+export type SqlAdapter = "pglite";
 
 export interface QueryResultRow {
   [key: string]: unknown;
@@ -178,7 +197,7 @@ export interface DbClient {
 }
 
 export interface SqlDatabase extends DbClient {
-  readonly adapter: StorageAdapter;
+  readonly adapter: SqlAdapter;
   tx<T>(fn: (tx: DbClient) => Promise<T>): Promise<T>;
   close?(): Promise<void> | void;
 }
@@ -192,7 +211,7 @@ function rewritePositionalParams(sql: string): string {
 }
 
 class PgliteClient implements SqlDatabase {
-  readonly adapter: StorageAdapter = "pglite";
+  readonly adapter: SqlAdapter = "pglite";
 
   constructor(private readonly db: PGlite) {}
 
@@ -236,7 +255,7 @@ export async function createPgliteDatabase(path = "memory://"): Promise<SqlDatab
   return new PgliteClient(db);
 }
 
-export async function connect(path = "memory://", adapter: StorageAdapter = "pglite"): Promise<SqlDatabase> {
+export async function connect(path = "memory://", adapter: SqlAdapter = "pglite"): Promise<SqlDatabase> {
   if (adapter !== "pglite") {
     throw new Error(`unsupported storage adapter: ${adapter as string}`);
   }

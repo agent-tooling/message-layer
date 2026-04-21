@@ -7,9 +7,21 @@ describe("config", () => {
     expect(cfg).toMatchObject({
       port: 3000,
       storage: { adapter: "pglite", path: "memory://server" },
+      artifacts: { kind: "local-fs", basePath: "./.data/artifacts" },
       plugins: [],
       websocket: true,
     });
+    expect(cfg.artifacts.maxBytes).toBeGreaterThan(0);
+  });
+
+  test("ARTIFACTS_STORAGE=memory switches to in-memory blob storage", () => {
+    const cfg = parseServerConfig({ ARTIFACTS_STORAGE: "memory", ARTIFACTS_MAX_BYTES: "1024" });
+    expect(cfg.artifacts.kind).toBe("memory");
+    expect(cfg.artifacts.maxBytes).toBe(1024);
+  });
+
+  test("rejects unsupported ARTIFACTS_STORAGE", () => {
+    expect(() => parseServerConfig({ ARTIFACTS_STORAGE: "gcs" })).toThrow(/unsupported ARTIFACTS_STORAGE/);
   });
 
   test("parses PLUGINS env shorthand into objects", () => {

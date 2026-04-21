@@ -65,6 +65,7 @@ export const eventTypes = [
   "permission_request.resolved",
   "privacy_policy.updated",
   "artifact.registered",
+  "artifact.deleted",
   "knowledge.promoted",
   "audit.logged",
   "org.created",

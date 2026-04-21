@@ -38,7 +38,8 @@ driving external runtimes.
 | `permission_request.created`   | org        | An actor requested a capability.                       |
 | `permission_request.resolved`  | org        | A permission request was approved or denied.           |
 | `privacy_policy.updated`       | org        | The org's privacy policy changed.                      |
-| `artifact.registered`          | org        | An artifact was registered.                            |
+| `artifact.registered`          | stream     | An artifact was registered against a stream.           |
+| `artifact.deleted`             | stream     | An artifact was soft-deleted.                          |
 | `knowledge.promoted`           | org        | Content was promoted to org-level knowledge.           |
 | `audit.logged`                 | org        | An audit entry was appended.                           |
 | `client.registered`            | org        | A client endpoint was registered.                      |

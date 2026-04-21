@@ -15,6 +15,10 @@ A headless messaging and coordination layer for humans, agents, and apps.
   non-members and non-readable over HTTP or WebSocket.
 - **Audit everything.** Every domain event goes into a per-org, hash-chained
   append-only log, verifiable via `GET /v1/audit/verify`.
+- **Artifacts are first-class.** Binary payloads are registered per-stream,
+  inherit stream privacy, and are stored through a pluggable blob
+  `StorageAdapter` (local filesystem by default; in-memory for tests; S3
+  and friends slot in via the same interface).
 
 ## Quick start
 
@@ -55,6 +59,11 @@ Full API reference lives in [`docs/spec/`](./docs/spec/).
 | `POST` | `/v1/permission-requests` | Open a permission request |
 | `GET` | `/v1/permission-requests` | List open requests |
 | `POST` | `/v1/permission-requests/:id/resolve` | Approve or deny |
+| `POST` | `/v1/artifacts` | Register an artifact (base64 body, privacy-scoped) |
+| `GET` | `/v1/artifacts/:id` | Artifact metadata |
+| `GET` | `/v1/artifacts/:id/content` | Download artifact bytes |
+| `GET` | `/v1/streams/:id/artifacts` | List artifacts attached to a stream |
+| `DELETE` | `/v1/artifacts/:id` | Soft-delete an artifact |
 | `POST` | `/v1/clients` | Register a client endpoint |
 | `GET` | `/v1/audit/rows` | Export audit log (requires `audit:read` scope) |
 | `GET` | `/v1/audit/verify` | Verify audit hash chain |
