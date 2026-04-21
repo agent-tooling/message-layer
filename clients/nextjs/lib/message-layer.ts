@@ -118,7 +118,8 @@ async function ensureOrg(): Promise<string> {
   if (existing) {
     return existing;
   }
-  const orgId = await createOrg(env.DEFAULT_ORG_NAME);
+  const workspaceName = getSetting("workspace_name") ?? env.DEFAULT_ORG_NAME;
+  const orgId = await createOrg(workspaceName);
   setSetting("default_org_id", orgId);
   return orgId;
 }

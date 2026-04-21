@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --port 3001",
+    "dev": "pnpm run auth:migrate && next dev --port 3001",
+    "auth:migrate": "node scripts/ensure-auth-schema.mjs",
     "build": "next build",
     "start": "next start --port 3001",
     "typecheck": "tsc --noEmit",

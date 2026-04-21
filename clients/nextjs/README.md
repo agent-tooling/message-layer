@@ -32,14 +32,11 @@ pnpm run dev
 
 The app serves on `http://localhost:3001`.
 
-### First-time Better Auth database
+### Better Auth database
 
-The auth schema is managed by Better Auth. The first time you run the client, apply migrations:
-
-```bash
-cd clients/nextjs
-pnpm dlx @better-auth/cli migrate --config ./lib/auth.ts --yes
-```
+The `dev` command now runs an auth-schema check first and applies Better Auth
+migrations automatically when needed. A wiped `.data/` directory should still
+boot cleanly without manual migration steps.
 
 ## Agent onboarding surface
 
