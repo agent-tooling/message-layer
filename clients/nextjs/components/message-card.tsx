@@ -12,11 +12,19 @@ type Message = {
 
 type Actor = { actorId: string; displayName: string; actorType: string };
 
+type ThreadRef = {
+  id: string;
+  createdAt: string;
+};
+
 type Props = {
   message: Message;
   actorsById: Record<string, Actor>;
   currentActorId: string | null;
+  threads: ThreadRef[];
+  activeThreadId: string | null;
   onCreateThread: (parentMessageId: string) => void;
+  onOpenThread: (threadId: string) => void;
 };
 
 function senderLabel(message: Message, actorsById: Record<string, Actor>, currentActorId: string | null) {
@@ -34,7 +42,25 @@ function senderLabel(message: Message, actorsById: Record<string, Actor>, curren
   };
 }
 
-export function MessageCard({ message, actorsById, currentActorId, onCreateThread }: Props) {
+function formatThreadLabel(thread: ThreadRef, index: number): string {
+  const suffix = Number.isNaN(new Date(thread.createdAt).getTime())
+    ? thread.id.slice(0, 6)
+    : new Date(thread.createdAt).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+  return `Thread ${index + 1} · ${suffix}`;
+}
+
+export function MessageCard({
+  message,
+  actorsById,
+  currentActorId,
+  threads,
+  activeThreadId,
+  onCreateThread,
+  onOpenThread,
+}: Props) {
   const sender = senderLabel(message, actorsById, currentActorId);
 
   const accent = sender.isAgent
@@ -67,14 +93,36 @@ export function MessageCard({ message, actorsById, currentActorId, onCreateThrea
         ))}
       </div>
 
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800"
           type="button"
           onClick={() => onCreateThread(message.id)}
+          data-testid="create-thread"
         >
-          Create thread
+          {threads.length > 0 ? "New thread" : "Create thread"}
         </button>
+        {threads.map((thread, index) => {
+          const active = thread.id === activeThreadId;
+          return (
+            <button
+              key={thread.id}
+              type="button"
+              onClick={() => onOpenThread(thread.id)}
+              data-testid="open-thread"
+              className={`rounded-full px-3 py-1 text-[11px] font-medium transition ${
+                active
+                  ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/50"
+                  : "bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700"
+              }`}
+            >
+              💬 {formatThreadLabel(thread, index)}
+            </button>
+          );
+        })}
+        {threads.length > 1 ? (
+          <span className="text-[11px] text-zinc-500">{threads.length} threads</span>
+        ) : null}
       </div>
     </div>
   );

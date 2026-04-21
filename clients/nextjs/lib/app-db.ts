@@ -1,12 +1,22 @@
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import Database from "better-sqlite3";
 
-const dataDir = join(process.cwd(), ".data");
+// `TEAM_CLIENT_DATA_DIR` lets tests and isolated dev instances point at a
+// dedicated data directory instead of sharing the default `.data/` folder
+// next to `package.json`. Relative paths resolve against `process.cwd()`.
+const dataDirEnv = process.env.TEAM_CLIENT_DATA_DIR;
+const dataDir = dataDirEnv
+  ? isAbsolute(dataDirEnv)
+    ? dataDirEnv
+    : join(process.cwd(), dataDirEnv)
+  : join(process.cwd(), ".data");
 mkdirSync(dataDir, { recursive: true });
 
 const dbPath = join(dataDir, "team-client.db");
 const sqlite = new Database(dbPath);
+
+export const TEAM_CLIENT_DATA_DIR = dataDir;
 
 sqlite.exec(`
 CREATE TABLE IF NOT EXISTS app_settings (

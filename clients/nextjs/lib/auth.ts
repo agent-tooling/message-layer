@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import Database from "better-sqlite3";
 import { betterAuth } from "better-auth";
 import { organization } from "better-auth/plugins";
@@ -14,9 +15,9 @@ import {
   promoteKnowledge,
   registerArtifact,
 } from "@/lib/message-layer";
-import { createInvite } from "@/lib/app-db";
+import { createInvite, TEAM_CLIENT_DATA_DIR } from "@/lib/app-db";
 
-const authDb = new Database(`${process.cwd()}/.data/better-auth.db`);
+const authDb = new Database(join(TEAM_CLIENT_DATA_DIR, "better-auth.db"));
 
 // Local dev + smoke tests reach the app on both `localhost:3001` and
 // `127.0.0.1:3001`. Better Auth defaults to rejecting any origin that does

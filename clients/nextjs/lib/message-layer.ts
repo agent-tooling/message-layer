@@ -362,11 +362,22 @@ export async function listThreads(
   return result.threads;
 }
 
-export async function createThread(principal: MlPrincipal, channelId: string, parentMessageId: string): Promise<string> {
+export async function createThread(
+  principal: MlPrincipal,
+  channelId: string,
+  parentMessageId: string,
+  visibility: "public" | "private" = "public",
+): Promise<string> {
+  // Default to matching the channel's visibility. In this client all channels
+  // are created as `public`, so making threads public preserves the
+  // "derived data must never be more visible than its source" rule while
+  // still letting every channel reader see the thread. Service-level
+  // assertStreamReadable otherwise requires explicit channel membership
+  // for private threads.
   const result = await mlRequest<{ threadId: string }>("/v1/threads", {
     method: "POST",
     principal,
-    body: { channelId, parentMessageId, visibility: "private" },
+    body: { channelId, parentMessageId, visibility },
   });
   return result.threadId;
 }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { MessageCard } from "@/components/message-card";
+import { ThreadPanel } from "@/components/thread-panel";
 
 type Channel = { id: string; name: string; visibility: string };
 type Message = {
@@ -15,6 +16,7 @@ type Message = {
 type Member = { actorId: string; displayName: string; actorType: string };
 type Attachment = { id: string; name: string; mimeType: string; sizeBytes: number; url: string };
 type ActorRow = { actorId: string; displayName: string; actorType: string; createdAt: string };
+type Thread = { id: string; parentMessageId: string; createdAt?: string };
 type PermissionRequest = {
   requestId: string;
   actorId: string;
@@ -35,13 +37,48 @@ export function TeamWorkspace() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [newChannelName, setNewChannelName] = useState("");
   const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [threadsByChannel, setThreadsByChannel] = useState<Record<string, Array<{ id: string; parentMessageId: string }>>>({});
+  const [threadsByChannel, setThreadsByChannel] = useState<Record<string, Thread[]>>({});
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<PermissionRequest[]>([]);
   const [pendingUpload, setPendingUpload] = useState<Attachment[]>([]);
   const [currentActorId, setCurrentActorId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const activeThreads = threadsByChannel[activeChannelId] ?? [];
+
+  const threadsByParentMessage = useMemo(() => {
+    const map: Record<string, Thread[]> = {};
+    for (const thread of activeThreads) {
+      const list = map[thread.parentMessageId] ?? [];
+      list.push(thread);
+      map[thread.parentMessageId] = list;
+    }
+    // Keep a stable chronological ordering so "Thread 1" stays "Thread 1".
+    for (const key of Object.keys(map)) {
+      map[key].sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (aTime !== bTime) return aTime - bTime;
+        return a.id.localeCompare(b.id);
+      });
+    }
+    return map;
+  }, [activeThreads]);
+
+  const activeThread = useMemo(() => {
+    if (!activeThreadId) return null;
+    return activeThreads.find((thread) => thread.id === activeThreadId) ?? null;
+  }, [activeThreadId, activeThreads]);
+
+  const activeThreadParentMessage = useMemo(() => {
+    if (!activeThread) return null;
+    return messages.find((message) => message.id === activeThread.parentMessageId) ?? null;
+  }, [activeThread, messages]);
+
+  const activeThreadSiblings = activeThread ? threadsByParentMessage[activeThread.parentMessageId] ?? [] : [];
+  const activeThreadIndex = activeThread
+    ? activeThreadSiblings.findIndex((thread) => thread.id === activeThread.id)
+    : -1;
 
   const actorsById = useMemo(() => {
     const map: Record<string, ActorRow> = {};
@@ -88,9 +125,7 @@ export function TeamWorkspace() {
   }
 
   async function refreshThreads(channelId: string) {
-    const result = await api<{ threads: Array<{ id: string; parentMessageId: string }> }>(
-      `/api/team/channels/${channelId}/threads`,
-    );
+    const result = await api<{ threads: Thread[] }>(`/api/team/channels/${channelId}/threads`);
     setThreadsByChannel((prev) => ({ ...prev, [channelId]: result.threads }));
   }
 
@@ -112,6 +147,9 @@ export function TeamWorkspace() {
 
   useEffect(() => {
     if (!activeChannelId) return;
+    // Close any open thread when switching channels so the right panel
+    // never shows a thread from a channel the user just left.
+    setActiveThreadId(null);
     void refreshMessages(activeChannelId).catch((err) => setError((err as Error).message));
     void refreshThreads(activeChannelId).catch((err) => setError((err as Error).message));
     const timer = setInterval(() => {
@@ -122,6 +160,15 @@ export function TeamWorkspace() {
     }, 2200);
     return () => clearInterval(timer);
   }, [activeChannelId]);
+
+  // If the open thread vanishes from the active channel (e.g. channel
+  // switched, thread deleted server-side) clear the selection so stale
+  // thread ids never leak into the right panel.
+  useEffect(() => {
+    if (!activeThreadId) return;
+    const stillPresent = activeThreads.some((thread) => thread.id === activeThreadId);
+    if (!stillPresent) setActiveThreadId(null);
+  }, [activeThreadId, activeThreads]);
 
   async function sendMessage(event: React.FormEvent) {
     event.preventDefault();
@@ -205,15 +252,29 @@ export function TeamWorkspace() {
   async function createThreadFromMessage(parentMessageId: string) {
     if (!activeChannelId) return;
     try {
-      await api(`/api/team/channels/${activeChannelId}/threads`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ parentMessageId }),
-      });
+      const result = await api<{ threadId: string }>(
+        `/api/team/channels/${activeChannelId}/threads`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ parentMessageId }),
+        },
+      );
       await refreshThreads(activeChannelId);
+      // Auto-open the freshly created thread so the user lands directly
+      // in the composer — this is the "new thread" affordance.
+      setActiveThreadId(result.threadId);
     } catch (err) {
       setError((err as Error).message);
     }
+  }
+
+  function openThread(threadId: string) {
+    setActiveThreadId(threadId);
+  }
+
+  function closeThread() {
+    setActiveThreadId(null);
   }
 
   async function resolveApproval(requestId: string, approve: boolean) {
@@ -442,7 +503,10 @@ export function TeamWorkspace() {
               message={message}
               actorsById={actorsById}
               currentActorId={currentActorId}
+              threads={threadsByParentMessage[message.id] ?? []}
+              activeThreadId={activeThreadId}
               onCreateThread={createThreadFromMessage}
+              onOpenThread={openThread}
             />
           ))}
         </div>
@@ -482,6 +546,18 @@ export function TeamWorkspace() {
           </form>
         </div>
       </main>
+
+      {activeThread ? (
+        <ThreadPanel
+          threadId={activeThread.id}
+          threadIndex={activeThreadIndex >= 0 ? activeThreadIndex : 0}
+          threadCount={activeThreadSiblings.length || 1}
+          parentMessage={activeThreadParentMessage}
+          actorsById={actorsById}
+          currentActorId={currentActorId}
+          onClose={closeThread}
+        />
+      ) : null}
     </div>
   );
 }
