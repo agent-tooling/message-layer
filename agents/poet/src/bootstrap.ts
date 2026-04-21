@@ -1,6 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import Database from "better-sqlite3";
 import { MessageLayerClient, type Principal } from "./ml.js";
 
 const STATE_DIR = resolve(".data");
@@ -27,24 +26,11 @@ function saveState(state: PoetState): void {
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-function readTeamClientOrgId(dbPath: string): string | null {
-  const fullPath = resolve(dbPath);
-  if (!existsSync(fullPath)) return null;
-  const db = new Database(fullPath, { readonly: true });
-  try {
-    const row = db
-      .prepare<[string], { value: string }>("SELECT value FROM app_settings WHERE key = ?")
-      .get("default_org_id");
-    return row?.value ?? null;
-  } finally {
-    db.close();
-  }
-}
-
 /**
  * Verify the stored actor still exists in the message-layer server. Relevant
  * because the default dev config runs PGlite in `memory://server` — restarting
- * the server wipes every org + actor we previously created.
+ * the server wipes every org + actor we previously created, so a cached
+ * principal from the last boot would start returning "actor is not in org".
  */
 async function actorIsLive(client: MessageLayerClient, principal: Principal): Promise<boolean> {
   try {
@@ -69,21 +55,35 @@ export type BootstrapResult = {
 
 /**
  * Resolve the agent's identity:
- *   1. Reuse the saved state if it still points at a live actor.
- *   2. Otherwise read the default org id from the Next.js team-client.db
- *      and mint a fresh `agent` actor in it.
+ *   1. Reuse the saved state when it still points at a live actor in the
+ *      requested org.
+ *   2. Otherwise mint a fresh `agent` actor in the supplied org id.
+ *
  * The agent deliberately boots with **no** scopes so the permission flow
  * kicks in the first time it tries to create #poems or post into it.
+ *
+ * The org id is passed in by the caller (from a `--org-id` CLI flag or
+ * `MESSAGE_LAYER_ORG_ID`) — we intentionally do NOT peek into the Next.js
+ * client's SQLite. In practice, an operator onboarding a real agent knows
+ * which org it belongs in; reading another app's DB would be a
+ * boundary violation (and silently caches a stale id the moment the core
+ * server restarts on `memory://`).
  */
 export async function bootstrapAgent(opts: {
   baseUrl: string;
-  teamDbPath: string;
+  orgId: string;
   displayName: string;
 }): Promise<BootstrapResult> {
+  if (!opts.orgId) {
+    throw new Error(
+      "missing org id — pass `--org-id <id>` on the command line or set MESSAGE_LAYER_ORG_ID in the environment",
+    );
+  }
+
   const client = new MessageLayerClient(opts.baseUrl);
 
   const cached = loadState();
-  if (cached) {
+  if (cached && cached.orgId === opts.orgId) {
     const principal: Principal = {
       actorId: cached.actorId,
       orgId: cached.orgId,
@@ -95,15 +95,19 @@ export async function bootstrapAgent(opts: {
     }
   }
 
-  const orgId = readTeamClientOrgId(opts.teamDbPath);
-  if (!orgId) {
-    throw new Error(
-      `cannot find default_org_id in ${opts.teamDbPath}. Start the Next.js client (pnpm run client:nextjs) and sign in once so it bootstraps an org, then restart the poet.`,
-    );
+  let actorId: string;
+  try {
+    actorId = await client.createActor(opts.orgId, "agent", opts.displayName);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/org not found/i.test(message)) {
+      throw new Error(
+        `org ${opts.orgId} not found on ${opts.baseUrl}. Did the core server restart? It runs PGlite in-memory by default, so its org catalog is reset on every boot. Open the Next.js app so it recreates the org, then re-run the poet with the fresh --org-id.`,
+      );
+    }
+    throw error;
   }
-
-  const actorId = await client.createActor(orgId, "agent", opts.displayName);
-  const principal: Principal = { actorId, orgId, scopes: [], provider: "poet-agent" };
-  saveState({ orgId, actorId, provider: principal.provider, createdAt: new Date().toISOString() });
+  const principal: Principal = { actorId, orgId: opts.orgId, scopes: [], provider: "poet-agent" };
+  saveState({ orgId: opts.orgId, actorId, provider: principal.provider, createdAt: new Date().toISOString() });
   return { principal, client, reused: false };
 }

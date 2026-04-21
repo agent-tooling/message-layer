@@ -14,12 +14,14 @@ import { Agent } from "@mastra/core/agent";
 import { bootstrapAgent } from "./bootstrap.js";
 import { makePoetTools } from "./tools.js";
 
-const BASE_URL = process.env.MESSAGE_LAYER_BASE_URL ?? "http://127.0.0.1:3000";
-const HEALTH_URL = process.env.NEXTJS_HEALTH_URL ?? "http://localhost:3001";
-const TEAM_DB = process.env.NEXTJS_TEAM_DB ?? "../../clients/nextjs/.data/team-client.db";
-const INTERVAL_MS = Number(process.env.POET_INTERVAL_MS ?? "60000");
-const MODEL = process.env.POET_MODEL ?? "openai/gpt-4o-mini";
-const ONCE = process.argv.includes("--once");
+const args = parseArgs(process.argv.slice(2));
+
+const BASE_URL = args.baseUrl ?? process.env.MESSAGE_LAYER_BASE_URL ?? "http://127.0.0.1:3000";
+const HEALTH_URL = args.healthUrl ?? process.env.NEXTJS_HEALTH_URL ?? "http://localhost:3001";
+const ORG_ID = args.orgId ?? process.env.MESSAGE_LAYER_ORG_ID ?? "";
+const INTERVAL_MS = Number(args.intervalMs ?? process.env.POET_INTERVAL_MS ?? "60000");
+const MODEL = args.model ?? process.env.POET_MODEL ?? "openai/gpt-4o-mini";
+const ONCE = args.once;
 
 const colors = {
   reset: "\x1b[0m",
@@ -56,9 +58,22 @@ async function isNextjsUp(): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
+  if (args.help) {
+    printUsage();
+    return;
+  }
   if (!process.env.OPENAI_API_KEY) {
     console.error(
       `${colors.red}✗ OPENAI_API_KEY is not set. Export it (or copy .env.example → .env) and try again.${colors.reset}`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (!ORG_ID) {
+    console.error(
+      `${colors.red}✗ missing org id. Pass it as \`--org-id <id>\` or export MESSAGE_LAYER_ORG_ID.${colors.reset}\n` +
+        `  Look it up from the Next.js client with:\n` +
+        `    sqlite3 clients/nextjs/.data/team-client.db "select value from app_settings where key='default_org_id'"`,
     );
     process.exitCode = 1;
     return;
@@ -67,6 +82,7 @@ async function main(): Promise<void> {
   logHeader("poet boot");
   log("env", `message-layer ${colors.cyan}${BASE_URL}${colors.reset}`);
   log("env", `next.js      ${colors.cyan}${HEALTH_URL}${colors.reset}`);
+  log("env", `org id       ${colors.magenta}${ORG_ID}${colors.reset}`);
   log("env", `tick every   ${colors.cyan}${INTERVAL_MS}ms${colors.reset}${ONCE ? ` ${colors.yellow}(--once)${colors.reset}` : ""}`);
   log("env", `model        ${colors.cyan}${MODEL}${colors.reset}`);
 
@@ -81,7 +97,7 @@ async function main(): Promise<void> {
 
   const { principal, reused } = await bootstrapAgent({
     baseUrl: BASE_URL,
-    teamDbPath: TEAM_DB,
+    orgId: ORG_ID,
     displayName: "poet-agent",
   });
   log("bootstrap", `${reused ? "reusing" : "created"} agent actor ${colors.magenta}${principal.actorId}${colors.reset} in org ${colors.magenta}${principal.orgId}${colors.reset}`);
@@ -175,6 +191,68 @@ function extractToolArgs(call: unknown): unknown {
 function extractToolResult(result: unknown): unknown {
   const r = result as { payload?: { result?: unknown }; result?: unknown };
   return r.payload?.result ?? r.result ?? result;
+}
+
+type ParsedArgs = {
+  help: boolean;
+  once: boolean;
+  orgId?: string;
+  baseUrl?: string;
+  healthUrl?: string;
+  intervalMs?: string;
+  model?: string;
+};
+
+function parseArgs(argv: string[]): ParsedArgs {
+  const out: ParsedArgs = { help: false, once: false };
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const eat = (): string | undefined => {
+      const eq = arg.indexOf("=");
+      if (eq !== -1) return arg.slice(eq + 1);
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith("--")) return undefined;
+      i += 1;
+      return next;
+    };
+    if (arg === "--help" || arg === "-h") out.help = true;
+    else if (arg === "--once") out.once = true;
+    else if (arg === "--org-id" || arg === "--org" || arg.startsWith("--org-id=") || arg.startsWith("--org=")) out.orgId = eat();
+    else if (arg === "--base-url" || arg.startsWith("--base-url=")) out.baseUrl = eat();
+    else if (arg === "--health-url" || arg.startsWith("--health-url=")) out.healthUrl = eat();
+    else if (arg === "--interval-ms" || arg.startsWith("--interval-ms=")) out.intervalMs = eat();
+    else if (arg === "--model" || arg.startsWith("--model=")) out.model = eat();
+  }
+  return out;
+}
+
+function printUsage(): void {
+  console.log(`poet agent — a Mastra loop that writes poems into #poems
+
+Usage:
+  pnpm start --org-id <orgId> [flags]
+  pnpm run once --org-id <orgId>                 # single tick, exit
+
+Flags:
+  --org-id <id>         Org the agent should join (required; or MESSAGE_LAYER_ORG_ID)
+  --base-url <url>      message-layer base URL (default: http://127.0.0.1:3000)
+  --health-url <url>    Next.js health URL    (default: http://localhost:3001)
+  --interval-ms <ms>    tick cadence          (default: 60000)
+  --model <id>          Mastra model id       (default: openai/gpt-4o-mini)
+  --once                run a single tick and exit
+  -h, --help            show this message
+
+Environment (used when the flag is not passed):
+  OPENAI_API_KEY         required
+  MESSAGE_LAYER_ORG_ID   required unless --org-id is passed
+  MESSAGE_LAYER_BASE_URL
+  NEXTJS_HEALTH_URL
+  POET_INTERVAL_MS
+  POET_MODEL
+
+Find the current default org id with:
+  sqlite3 clients/nextjs/.data/team-client.db "select value from app_settings where key='default_org_id'"
+`);
 }
 
 void main();

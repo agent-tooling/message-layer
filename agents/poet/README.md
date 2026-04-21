@@ -10,34 +10,44 @@ in the Next.js workspace UI, and on the next tick the agent succeeds.
 
 ## Prerequisites
 
-1. Run the core server: `pnpm run dev` (from the repo root)
+1. Run the core server: `pnpm run dev` (from the repo root).
 2. Run the Next.js client: `pnpm run client:nextjs`, sign in once so it
    bootstraps the default org.
-3. Export an OpenAI key: `export OPENAI_API_KEY=sk-...`
+3. Grab the org id the agent should join:
+   ```bash
+   sqlite3 clients/nextjs/.data/team-client.db \
+     "select value from app_settings where key='default_org_id'"
+   ```
+4. Export an OpenAI key: `export OPENAI_API_KEY=sk-...`.
 
 ## Run
 
 ```bash
-pnpm --dir agents/poet install          # first time only
-pnpm --dir agents/poet start            # loop forever, one tick per POET_INTERVAL_MS
-pnpm --dir agents/poet run once         # run a single tick and exit
+pnpm --dir agents/poet install                                     # first time
+pnpm --dir agents/poet start --org-id <orgId>                      # loop
+pnpm --dir agents/poet run once -- --org-id <orgId>                # single tick
 ```
 
-Or from the repo root:
+Or from the repo root (note the `--` so pnpm forwards the flags):
 
 ```bash
-pnpm run agent:poet                     # loop
-pnpm run agent:poet:once                # single tick
+pnpm run agent:poet -- --org-id <orgId>
+pnpm run agent:poet:once -- --org-id <orgId>
 ```
+
+Any flag can also come from the environment — `MESSAGE_LAYER_ORG_ID`,
+`POET_INTERVAL_MS`, `POET_MODEL`, `MESSAGE_LAYER_BASE_URL`,
+`NEXTJS_HEALTH_URL`. Run with `--help` for the full list.
 
 ## What happens
 
 1. **Health check** `http://localhost:3001/` — if the Next.js app is not
    responding, the loop halts immediately so no OpenAI tokens are burned.
-2. **Bootstrap** reads `default_org_id` from the Next.js
-   `team-client.db` and mints a fresh `agent` actor in that org
-   (`actorType="agent"`, `displayName="poet-agent"`) with **no** scopes.
-   State is cached in `.data/poet-state.json`.
+2. **Bootstrap** mints a fresh `agent` actor in the org supplied via
+   `--org-id` (or `MESSAGE_LAYER_ORG_ID`) with `actorType="agent"`,
+   `displayName="poet-agent"`, and **no** scopes. State is cached in
+   `.data/poet-state.json` and reused on later boots when the stored
+   actor is still live in the message-layer server.
 3. **Loop** (every `POET_INTERVAL_MS`, default 60000):
    - Re-check Next.js health. Down → halt.
    - `agent.generate(...)` with three tools available:
@@ -67,12 +77,13 @@ standard ports.
 
 ## Troubleshooting
 
-- **`cannot find default_org_id`** → The Next.js client hasn't bootstrapped
-  an org yet. Open http://localhost:3001 and sign in once.
-- **`actor is not in org` on boot** → The message-layer server restarted
-  and wiped its PGlite memory, so the cached actor is gone. Delete
-  `.data/poet-state.json` (or the `actorIsLive` check will do it for you
-  on next boot).
+- **`missing org id`** → Pass `--org-id <id>` or set
+  `MESSAGE_LAYER_ORG_ID`. Look up the current default org via the
+  sqlite query at the top of this file.
+- **`org <id> not found`** → The core server restarted and wiped its
+  in-memory catalog. Re-open the Next.js app so it recreates the org,
+  then re-run the poet with the fresh id. The agent's cached actor is
+  also staleness-checked on every boot, so no extra cleanup is needed.
 - **`Incorrect API key provided`** → Mastra logs the full upstream error
   before the agent catches it. Set a real `OPENAI_API_KEY` and the noise
   disappears.
