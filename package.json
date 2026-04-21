@@ -17,6 +17,50 @@
     "./sdk": {
       "import": "./dist/sdk/index.js",
       "types": "./dist/sdk/index.d.ts"
+    },
+    "./plugins/api-key-auth": {
+      "import": "./dist/plugins/api-key-auth.js",
+      "types": "./dist/plugins/api-key-auth.d.ts"
+    },
+    "./plugins/durable-streams": {
+      "import": "./dist/plugins/durable-streams.js",
+      "types": "./dist/plugins/durable-streams.d.ts"
+    },
+    "./plugins/event-logger": {
+      "import": "./dist/plugins/event-logger.js",
+      "types": "./dist/plugins/event-logger.d.ts"
+    },
+    "./plugins/health-meta": {
+      "import": "./dist/plugins/health-meta.js",
+      "types": "./dist/plugins/health-meta.d.ts"
+    },
+    "./plugins/in-memory-knowledge": {
+      "import": "./dist/plugins/in-memory-knowledge.js",
+      "types": "./dist/plugins/in-memory-knowledge.d.ts"
+    },
+    "./plugins/request-logging": {
+      "import": "./dist/plugins/request-logging.js",
+      "types": "./dist/plugins/request-logging.d.ts"
+    },
+    "./plugins/scoped-knowledge": {
+      "import": "./dist/plugins/scoped-knowledge.js",
+      "types": "./dist/plugins/scoped-knowledge.d.ts"
+    },
+    "./plugins/webhooks": {
+      "import": "./dist/plugins/webhooks.js",
+      "types": "./dist/plugins/webhooks.d.ts"
+    },
+    "./plugins/websocket": {
+      "import": "./dist/plugins/websocket.js",
+      "types": "./dist/plugins/websocket.d.ts"
+    },
+    "./storage/pglite": {
+      "import": "./dist/storage/pglite.js",
+      "types": "./dist/storage/pglite.d.ts"
+    },
+    "./storage/postgres": {
+      "import": "./dist/storage/postgres.js",
+      "types": "./dist/storage/postgres.d.ts"
     }
   },
   "files": [

@@ -4,7 +4,13 @@ import { loadServerConfig, type ServerConfig } from "./config.js";
 import { connect, type SqlDatabase } from "./db.js";
 import { InProcessEventBus, type EventBus } from "./event-bus.js";
 import { createApp } from "./http.js";
-import { applyPluginSchemas, applyPluginsToApp, resolvePlugins, type PluginLogger } from "./plugins.js";
+import {
+  applyPluginSchemas,
+  applyPluginsToApp,
+  notifyPluginsServerBound,
+  resolvePlugins,
+  type PluginLogger,
+} from "./plugins.js";
 import { MessageLayer, type MessageLayerService } from "./service.js";
 import { createStorageAdapter, type StorageAdapter } from "./storage.js";
 import { attachWebSocketServer, type WebSocketServerHandle } from "./ws.js";
@@ -65,8 +71,15 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     const s = serve({ fetch: app.fetch, port }, () => resolve(s as unknown as HttpServer));
   });
 
+  // Notify all plugins that the HTTP server is now bound. The websocket plugin
+  // uses this hook to call attachWebSocketServer.
+  await notifyPluginsServerBound(plugins, httpServer);
+
+  // Backward compat: if websocket: true in config AND no websocket plugin is
+  // present, attach the WebSocket server directly.
+  const hasWebSocketPlugin = plugins.some((p) => p.name === "websocket");
   let ws: WebSocketServerHandle | null = null;
-  if (config.websocket) {
+  if (config.websocket && !hasWebSocketPlugin) {
     ws = attachWebSocketServer(httpServer, service, bus);
   }
 

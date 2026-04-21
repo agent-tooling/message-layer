@@ -3,9 +3,15 @@ import type { ServerConfig } from "./config.js";
 import type { SqlDatabase } from "./db.js";
 import type { EventBus } from "./event-bus.js";
 import type { MessageLayerService } from "./service.js";
+import { apiKeyAuthPluginFactory } from "./plugins/api-key-auth.js";
+import { durableStreamsPlugin } from "./plugins/durable-streams.js";
+import { eventLoggerPluginFactory } from "./plugins/event-logger.js";
+import { healthMetaPluginFactory } from "./plugins/health-meta.js";
+import { inMemoryKnowledgePluginFactory } from "./plugins/in-memory-knowledge.js";
+import { requestLoggingPluginFactory } from "./plugins/request-logging.js";
 import { scopedKnowledgePlugin } from "./plugins/scoped-knowledge.js";
 import { webhookPlugin } from "./plugins/webhooks.js";
-import { durableStreamsPlugin } from "./plugins/durable-streams.js";
+import { websocketPluginFactory } from "./plugins/websocket.js";
 import type { DomainEvent } from "./types.js";
 
 export type PluginLogger = (message: string) => unknown;
@@ -35,148 +41,56 @@ export type ServerPlugin = {
   setup?: (ctx: PluginRuntimeContext) => void | Promise<void>;
   registerRoutes?: (ctx: PluginRuntimeContext) => void | Promise<void>;
   onEvent?: (event: DomainEvent, ctx: PluginRuntimeContext) => void | Promise<void>;
+  /**
+   * Called after the HTTP server is bound to a port. Use this hook when the
+   * plugin needs the live `http.Server` instance — e.g. to attach a WebSocket
+   * server via `server.on("upgrade", ...)`.
+   *
+   * Capture any context from `setup` via closure; the plugin system does not
+   * re-pass `PluginRuntimeContext` here since it is too late to wrap fetch.
+   */
+  onServerBound?: (server: import("node:http").Server) => void | Promise<void>;
   dispose?: () => void | Promise<void>;
 };
 
 export type PluginFactory = (options?: Record<string, unknown>) => ServerPlugin;
 
-// ── built-in plugins ───────────────────────────────────────────────────────
-
-function requestLoggingPlugin(options?: Record<string, unknown>): ServerPlugin {
-  const prefix = String(options?.prefix ?? "[ml]");
-  return {
-    name: "request-logging",
-    setup(ctx) {
-      ctx.wrapFetch((next) => async (request, ...args) => {
-        const start = Date.now();
-        const response = await next(request, ...args);
-        const durationMs = Date.now() - start;
-        const path = new URL(request.url).pathname;
-        await ctx.logger(`${prefix} ${request.method} ${path} -> ${response.status} (${durationMs}ms)`);
-        return response;
-      });
-    },
-  };
-}
-
-function healthMetaPlugin(options?: Record<string, unknown>): ServerPlugin {
-  const includeAdapter = options?.includeAdapter !== false;
-  const version = typeof options?.version === "string" ? options.version : undefined;
-  return {
-    name: "health-meta",
-    registerRoutes(ctx) {
-      ctx.app.get("/health/meta", (c) =>
-        c.json({
-          ok: true,
-          adapter: includeAdapter ? ctx.config.storage.adapter : undefined,
-          version,
-          plugins: ctx.config.plugins.map((p) => (typeof p === "string" ? p : p.name)),
-        }),
-      );
-    },
-  };
-}
-
-function apiKeyHeaderAuthPlugin(options?: Record<string, unknown>): ServerPlugin {
-  const headerName = String(options?.headerName ?? "x-api-key");
-  const envKey = String(options?.envKey ?? "MESSAGE_LAYER_API_KEY");
-  const protectedPrefixes = Array.isArray(options?.protectedPrefixes)
-    ? (options.protectedPrefixes as unknown[]).filter((v): v is string => typeof v === "string")
-    : ["/v1/"];
-  const strict = options?.strict === true;
-
-  return {
-    name: "api-key-header-auth",
-    setup(ctx) {
-      ctx.wrapFetch((next) => async (request, ...args) => {
-        const path = new URL(request.url).pathname;
-        const needsAuth = protectedPrefixes.some((prefix) => path.startsWith(prefix));
-        if (!needsAuth) return next(request, ...args);
-        const configuredKey = ctx.env[envKey];
-        if (!configuredKey) {
-          if (strict) {
-            return new Response(JSON.stringify({ error: "api key not configured" }), {
-              status: 503,
-              headers: { "content-type": "application/json" },
-            });
-          }
-          return next(request, ...args);
-        }
-        const sent = request.headers.get(headerName);
-        if (sent !== configuredKey) {
-          return new Response(JSON.stringify({ error: "invalid api key" }), {
-            status: 401,
-            headers: { "content-type": "application/json" },
-          });
-        }
-        return next(request, ...args);
-      });
-    },
-  };
-}
-
-function eventLoggerPlugin(options?: Record<string, unknown>): ServerPlugin {
-  const prefix = String(options?.prefix ?? "[event]");
-  let unsubscribe: (() => void) | undefined;
-  return {
-    name: "event-logger",
-    setup(ctx) {
-      unsubscribe = ctx.bus.subscribe((event) => {
-        void ctx.logger(`${prefix} ${event.type} org=${event.orgId} streamSeq=${event.streamSeq ?? "-"}`);
-      });
-    },
-    dispose() {
-      unsubscribe?.();
-    },
-  };
-}
-
-function inMemoryKnowledgePlugin(options?: Record<string, unknown>): ServerPlugin {
-  // Kept for historical compatibility and for plugin-authoring tests; the
-  // production-grade equivalent is `scoped-knowledge`, which snapshots
-  // source visibility, persists across restarts, delegates privacy checks
-  // to the core service, and supports promotion via `knowledge.promoted`.
-  const mountPath = typeof options?.mountPath === "string" ? options.mountPath : "/plugins/knowledge";
-  const perStream = new Map<string, string[]>();
-  let unsubscribe: (() => void) | undefined;
-  return {
-    name: "in-memory-knowledge",
-    setup(ctx) {
-      unsubscribe = ctx.bus.subscribe((event) => {
-        if (event.type !== "message.appended") return;
-        const streamId = event.streamId;
-        if (!streamId) return;
-        const payload = event.payload as { messageId?: string };
-        if (!payload.messageId) return;
-        const list = perStream.get(streamId) ?? [];
-        list.push(payload.messageId);
-        perStream.set(streamId, list);
-      });
-    },
-    registerRoutes(ctx) {
-      ctx.app.get(`${mountPath}/:streamId`, (c) => {
-        const { streamId } = c.req.param();
-        return c.json({ streamId, messageIds: perStream.get(streamId) ?? [] });
-      });
-    },
-    dispose() {
-      unsubscribe?.();
-    },
-  };
-}
+// ── built-in plugin registry ───────────────────────────────────────────────
 
 export const builtInPluginFactories: Record<string, PluginFactory> = {
-  "request-logging": requestLoggingPlugin,
-  "health-meta": healthMetaPlugin,
-  "api-key-header-auth": apiKeyHeaderAuthPlugin,
-  "event-logger": eventLoggerPlugin,
-  "in-memory-knowledge": inMemoryKnowledgePlugin,
+  "request-logging": requestLoggingPluginFactory,
+  "health-meta": healthMetaPluginFactory,
+  "api-key-header-auth": apiKeyAuthPluginFactory,
+  "event-logger": eventLoggerPluginFactory,
+  "in-memory-knowledge": inMemoryKnowledgePluginFactory,
   "scoped-knowledge": scopedKnowledgePlugin,
   webhooks: webhookPlugin,
   "durable-streams": durableStreamsPlugin,
+  websocket: websocketPluginFactory,
 };
 
-export type PluginSpec = string | { name: string; options?: Record<string, unknown> };
+export type PluginSpec = string | { name: string; options?: Record<string, unknown> } | ServerPlugin;
+
+/**
+ * Returns `true` when a spec is already an instantiated `ServerPlugin`
+ * (e.g. the result of calling `requestLoggingPlugin()` directly) rather than
+ * a string name or a `{ name, options }` descriptor.
+ *
+ * Detection: a descriptor only ever has `name` + `options`. An instantiated
+ * plugin has `name` plus at least one lifecycle method.
+ */
+function isPluginInstance(spec: PluginSpec): spec is ServerPlugin {
+  if (typeof spec === "string") return false;
+  const s = spec as Partial<ServerPlugin>;
+  return (
+    typeof s.setup === "function" ||
+    typeof s.registerRoutes === "function" ||
+    typeof s.onEvent === "function" ||
+    typeof s.onServerBound === "function" ||
+    typeof s.dispose === "function" ||
+    s.schemaSql !== undefined
+  );
+}
 
 export function resolvePlugins(specs: PluginSpec[]): ServerPlugin[] {
   return instantiatePlugins(specs);
@@ -184,6 +98,9 @@ export function resolvePlugins(specs: PluginSpec[]): ServerPlugin[] {
 
 export function instantiatePlugins(specs: PluginSpec[]): ServerPlugin[] {
   return specs.map((spec) => {
+    // Already-instantiated plugin — pass through unchanged.
+    if (isPluginInstance(spec)) return spec;
+
     const name = typeof spec === "string" ? spec : spec.name;
     const options = typeof spec === "string" ? undefined : spec.options;
     const factory = builtInPluginFactories[name];
@@ -228,6 +145,15 @@ export async function applyPluginsToApp(ctx: Omit<PluginRuntimeContext, "wrapFet
       await plugin.dispose?.();
     }
   };
+}
+
+export async function notifyPluginsServerBound(
+  plugins: ServerPlugin[],
+  server: import("node:http").Server,
+): Promise<void> {
+  for (const plugin of plugins) {
+    await plugin.onServerBound?.(server);
+  }
 }
 
 export async function applyPluginSchemas(

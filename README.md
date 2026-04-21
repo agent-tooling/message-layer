@@ -23,42 +23,74 @@ npm install message-layer
 
 ```typescript
 import { startServer } from "message-layer";
+import { websocketPlugin } from "message-layer/plugins/websocket";
 
-const server = await startServer();
+const server = await startServer({
+  plugins: [websocketPlugin()],
+});
 // HTTP + WebSocket on http://localhost:3000
 ```
 
-### With options
+### With typed plugin imports (recommended)
 
 ```typescript
 import { startServer } from "message-layer";
+import { pglite } from "message-layer/storage/pglite";
+import { apiKeyAuthPlugin } from "message-layer/plugins/api-key-auth";
+import { requestLoggingPlugin } from "message-layer/plugins/request-logging";
+import { webhookPlugin } from "message-layer/plugins/webhooks";
+import { websocketPlugin } from "message-layer/plugins/websocket";
 
 const server = await startServer({
   port: 4000,
-  storage: { adapter: "pglite", path: "./.data/db" },
+  config: { storage: pglite("./.data/db"), websocket: false },
   plugins: [
-    "request-logging",
-    { name: "api-key-header-auth", options: { strict: true } },
-    "webhooks",
+    requestLoggingPlugin(),
+    apiKeyAuthPlugin({ strict: true }),
+    webhookPlugin(),
+    websocketPlugin(),
   ],
-  websocket: true,
 });
 
-// Graceful shutdown
 await server.close();
 ```
 
 ### With Postgres
 
+```typescript
+import { startServer } from "message-layer";
+import { postgres } from "message-layer/storage/postgres";
+import { websocketPlugin } from "message-layer/plugins/websocket";
+
+await startServer({
+  config: { storage: postgres(process.env.DATABASE_URL!) },
+  plugins: [websocketPlugin()],
+});
+```
+
+Or via environment variables:
+
 ```bash
 STORAGE_ADAPTER=postgres \
 STORAGE_PATH=postgresql://user:pass@localhost:5432/mydb \
+PLUGINS=websocket,request-logging \
 node --enable-source-maps dist/server.js
 ```
 
 ### Securing a public deployment
 
-When the server is reachable over the public internet, gate it with a shared secret using the built-in `api-key-header-auth` plugin:
+When the server is reachable over the public internet, gate it with a shared secret:
+
+```typescript
+import { apiKeyAuthPlugin } from "message-layer/plugins/api-key-auth";
+
+await startServer({
+  plugins: [apiKeyAuthPlugin({ strict: true })],
+});
+// Set MESSAGE_LAYER_API_KEY in the environment
+```
+
+Or via environment variables:
 
 ```bash
 MESSAGE_LAYER_API_KEY=your-secret \
@@ -66,13 +98,7 @@ PLUGINS=api-key-header-auth \
 node dist/server.js
 ```
 
-All `/v1/*` requests — including the normally-unauthenticated `createOrg` and `createActor` endpoints — will be rejected with `401` unless the correct key is present. Pass `strict: true` to also reject requests when the env variable is missing (useful in production to catch misconfiguration):
-
-```typescript
-await startServer({
-  plugins: [{ name: "api-key-header-auth", options: { strict: true } }],
-});
-```
+All `/v1/*` requests — including the normally-unauthenticated `createOrg` and `createActor` — are rejected with `401` unless the correct key is present. `strict: true` returns `503` if the env variable is unset (catches misconfigured deployments).
 
 Send the key from the SDK:
 
@@ -84,11 +110,11 @@ const client = new MessageLayerClient({
 });
 ```
 
-The default header name is `x-api-key`. Override it on both sides if needed:
+Override the header name on both sides if needed:
 
 ```typescript
 // Server
-{ name: "api-key-header-auth", options: { headerName: "x-ml-secret" } }
+apiKeyAuthPlugin({ headerName: "x-ml-secret" })
 
 // Client
 new MessageLayerClient({ ..., apiKey: "...", apiKeyHeader: "x-ml-secret" })
@@ -168,18 +194,29 @@ const { channelId } = await client.createChannel("general");
 
 ## Embedding the service in-process
 
-For tests or server-side embedding without HTTP:
+For tests or server-side embedding without HTTP, use the storage subpaths:
 
 ```typescript
+import { createPgliteDatabase } from "message-layer/storage/pglite";
 import { MessageLayer } from "message-layer";
-import { openDatabase } from "message-layer";
 
-const db = await openDatabase({ adapter: "pglite", path: "memory://test" });
+const db = await createPgliteDatabase("memory://test");
 const service = new MessageLayer(db);
 
 const orgId = await service.createOrg("test");
 const actorId = await service.createActor(orgId, "Alice", "human");
 // ...all service methods available directly
+```
+
+The `pglite()` and `postgres()` factories return storage config descriptors for use with `startServer`:
+
+```typescript
+import { pglite } from "message-layer/storage/pglite";
+import { postgres } from "message-layer/storage/postgres";
+
+// startServer uses these as config.storage:
+const s1 = pglite("./.data/mydb");   // { adapter: "pglite",    path: "./.data/mydb" }
+const s2 = postgres(process.env.DB_URL!); // { adapter: "postgres", path: "<url>" }
 ```
 
 ---
@@ -190,25 +227,38 @@ Plugins extend message-layer with additional routes, event handlers, and schema 
 
 ### Configuring plugins
 
-**Via environment variable:**
-```bash
-PLUGINS=request-logging,webhooks node dist/server.js
-```
+Each plugin is a standalone subpath import with a typed factory function:
 
-**Via `startServer` options:**
 ```typescript
+import { requestLoggingPlugin } from "message-layer/plugins/request-logging";
+import { healthMetaPlugin }     from "message-layer/plugins/health-meta";
+import { apiKeyAuthPlugin }     from "message-layer/plugins/api-key-auth";
+import { eventLoggerPlugin }    from "message-layer/plugins/event-logger";
+import { webhookPlugin }        from "message-layer/plugins/webhooks";
+import { websocketPlugin }      from "message-layer/plugins/websocket";
+import { scopedKnowledgePlugin }from "message-layer/plugins/scoped-knowledge";
+import { durableStreamsPlugin }  from "message-layer/plugins/durable-streams";
+import { inMemoryKnowledgePlugin } from "message-layer/plugins/in-memory-knowledge";
+
 await startServer({
   plugins: [
-    "request-logging",
-    { name: "api-key-header-auth", options: { strict: true } },
-    { name: "health-meta", options: { version: "1.2.0" } },
+    requestLoggingPlugin(),
+    healthMetaPlugin({ version: "1.2.0" }),
+    apiKeyAuthPlugin({ strict: true }),
+    websocketPlugin(),
+    webhookPlugin(),
   ],
 });
 ```
 
+**Via environment variable** (string names, for process-level config):
+```bash
+PLUGINS=request-logging,websocket,webhooks node dist/server.js
+```
+
 **Via `MESSAGE_LAYER_CONFIG` JSON:**
 ```bash
-MESSAGE_LAYER_CONFIG='{"plugins":[{"name":"webhooks"},{"name":"request-logging"}]}' \
+MESSAGE_LAYER_CONFIG='{"plugins":[{"name":"websocket"},{"name":"webhooks"}]}' \
   node dist/server.js
 ```
 
@@ -325,6 +375,15 @@ Every authenticated request carries an `x-principal` JSON header. See [`docs/spe
 ---
 
 ## WebSocket
+
+WebSocket is a first-class plugin. Add it to your plugin list:
+
+```typescript
+import { websocketPlugin } from "message-layer/plugins/websocket";
+await startServer({ plugins: [websocketPlugin()] });
+```
+
+Or via env: `PLUGINS=websocket`. The `ENABLE_WEBSOCKET=true` env var still works for backward compatibility.
 
 `ws://<host>/v1/ws` accepts the same principal (header or `?principal=…`) and speaks a tiny JSON protocol:
 

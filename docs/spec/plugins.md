@@ -9,32 +9,45 @@ artifacts, cursors, clients, and audit. Everything else is a plugin.
 
 ## Configuration
 
-Plugins are configured at startup. Three methods are equivalent:
+### Typed subpath imports (recommended)
 
-**Via environment variable** (comma-separated names):
-
-```bash
-PLUGINS=request-logging,webhooks node dist/server.js
-```
-
-**Via `startServer` options:**
+Each plugin is a standalone subpath export with a typed factory function:
 
 ```typescript
 import { startServer } from "message-layer";
+import { requestLoggingPlugin } from "message-layer/plugins/request-logging";
+import { healthMetaPlugin }     from "message-layer/plugins/health-meta";
+import { apiKeyAuthPlugin }     from "message-layer/plugins/api-key-auth";
+import { eventLoggerPlugin }    from "message-layer/plugins/event-logger";
+import { webhookPlugin }        from "message-layer/plugins/webhooks";
+import { websocketPlugin }      from "message-layer/plugins/websocket";
+import { scopedKnowledgePlugin }from "message-layer/plugins/scoped-knowledge";
+import { durableStreamsPlugin }  from "message-layer/plugins/durable-streams";
+import { inMemoryKnowledgePlugin } from "message-layer/plugins/in-memory-knowledge";
 
 await startServer({
   plugins: [
-    "request-logging",
-    { name: "api-key-header-auth", options: { strict: true } },
-    { name: "health-meta", options: { version: "2.0.0" } },
+    requestLoggingPlugin({ prefix: "[app]" }),
+    healthMetaPlugin({ version: "2.0.0" }),
+    apiKeyAuthPlugin({ strict: true }),
+    websocketPlugin(),
   ],
 });
 ```
 
-**Via `MESSAGE_LAYER_CONFIG` JSON:**
+Plugins can be passed either as already-instantiated objects (as above) or as
+`{ name, options }` descriptors. Both forms can be mixed in the same array.
+
+### Via environment variable (for process-level config)
 
 ```bash
-MESSAGE_LAYER_CONFIG='{"plugins":[{"name":"webhooks"},{"name":"request-logging"}]}' \
+PLUGINS=request-logging,websocket,webhooks node dist/server.js
+```
+
+### Via `MESSAGE_LAYER_CONFIG` JSON
+
+```bash
+MESSAGE_LAYER_CONFIG='{"plugins":[{"name":"websocket"},{"name":"webhooks"}]}' \
   node dist/server.js
 ```
 
@@ -232,6 +245,33 @@ See [http-api.md](./http-api.md) for full request/response shapes.
 
 ---
 
+### `websocket`
+
+Attaches a WebSocket server to the HTTP server after it is bound to a port.
+This is the recommended way to enable WebSocket: using the plugin makes WS
+an explicit, opt-in dependency instead of a hidden flag.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `path` | `string` | `"/v1/ws"` | WebSocket endpoint path. |
+
+```typescript
+import { websocketPlugin } from "message-layer/plugins/websocket";
+
+await startServer({
+  plugins: [websocketPlugin()],
+  config: { websocket: false }, // disable the legacy flag; plugin takes over
+});
+```
+
+**Backward compat:** the `ENABLE_WEBSOCKET=true` environment variable and the
+`websocket: true` config flag still work when no `websocket` plugin is present.
+When the plugin IS present, the config flag is ignored.
+
+**String name (env-var config):** `"websocket"` (e.g. `PLUGINS=websocket`).
+
+---
+
 ### `durable-streams`
 
 Append-only named streams with optional TTL, consumer checkpoints, and
@@ -260,6 +300,28 @@ A lightweight in-memory index of message IDs per stream, built from
 `message.appended` events. Retained for plugin-authoring tests and backward
 compatibility. Use `scoped-knowledge` for production — it persists across
 restarts, enforces privacy, and supports promotion.
+
+---
+
+---
+
+## Storage adapters
+
+Storage adapters are separate subpath exports for the SQL database layer.
+
+```typescript
+import { pglite, createPgliteDatabase } from "message-layer/storage/pglite";
+import { postgres, createPostgresDatabase } from "message-layer/storage/postgres";
+
+// Config descriptors (pass to startServer as config.storage)
+pglite("./.data/mydb")                  // { adapter: "pglite",    path: "./.data/mydb" }
+pglite("memory://test")                 // { adapter: "pglite",    path: "memory://test" }
+postgres("postgresql://user:pass@/db")  // { adapter: "postgres",  path: "<url>" }
+
+// Direct database creation (for in-process embedding)
+const db = await createPgliteDatabase("memory://test");
+const db = await createPostgresDatabase(process.env.DATABASE_URL!);
+```
 
 ---
 
@@ -301,6 +363,12 @@ export const myPlugin: PluginFactory = (options = {}) => {
     // Mount HTTP routes
     registerRoutes(ctx) {
       ctx.app.get(mountPath, (c) => c.json({ ok: true }));
+    },
+
+    // Called after the HTTP server is bound — use for WebSocket upgrades,
+    // port-dependent setup, etc. Capture anything from setup() via closure.
+    onServerBound(server) {
+      // server is the live http.Server instance
     },
   };
 };
