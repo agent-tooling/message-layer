@@ -610,6 +610,20 @@ export function createApp(service: MessageLayerService): Hono {
     }
   });
 
+  app.get("/v1/actors/:actorId/grants", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const grants = await service.listActorEffectiveGrants(
+        auth.principal,
+        c.req.param("actorId"),
+      );
+      return c.json({ grants });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
   app.get("/v1/audit/verify", async (c) => {
     const auth = authed(c);
     if ("response" in auth) return auth.response;

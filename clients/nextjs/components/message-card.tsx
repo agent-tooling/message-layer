@@ -62,6 +62,8 @@ export function MessageCard({
   onOpenThread,
 }: Props) {
   const sender = senderLabel(message, actorsById, currentActorId);
+  const contentParts = message.parts.filter((part) => part.type !== "tool_call" && part.type !== "tool_result");
+  const toolParts = message.parts.filter((part) => part.type === "tool_call" || part.type === "tool_result");
 
   const accent = sender.isAgent
     ? "border-emerald-500/40 bg-emerald-500/[0.04]"
@@ -88,9 +90,21 @@ export function MessageCard({
       </div>
 
       <div className="mt-3 space-y-2">
-        {message.parts.map((part, index) => (
+        {contentParts.map((part, index) => (
           <MessagePartView key={index} part={part} />
         ))}
+        {toolParts.length > 0 ? (
+          <details className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs text-zinc-300">
+            <summary className="cursor-pointer list-none font-medium text-zinc-300">
+              Tool activity ({toolParts.length})
+            </summary>
+            <div className="mt-2 space-y-2">
+              {toolParts.map((part, index) => (
+                <MessagePartView key={`tool-${index}`} part={part} />
+              ))}
+            </div>
+          </details>
+        ) : null}
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -131,6 +145,23 @@ export function MessageCard({
 function MessagePartView({ part }: { part: MessagePart }) {
   if (part.type === "text") {
     const text = String(part.payload.text ?? "");
+    const kind = typeof part.payload.kind === "string" ? part.payload.kind : null;
+    if (kind === "thinking") {
+      return (
+        <div className="rounded-lg border border-fuchsia-900/60 bg-fuchsia-950/30 px-3 py-2 text-xs text-fuchsia-100">
+          <div className="mb-1 font-semibold">Thinking</div>
+          <p className="whitespace-pre-wrap leading-relaxed text-fuchsia-100/90">{text}</p>
+        </div>
+      );
+    }
+    if (kind === "references") {
+      return (
+        <div className="rounded-lg border border-sky-900/60 bg-sky-950/30 px-3 py-2 text-xs text-sky-100">
+          <div className="mb-1 font-semibold">References</div>
+          <p className="whitespace-pre-wrap leading-relaxed text-sky-100/90">{text}</p>
+        </div>
+      );
+    }
     return <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-100">{text}</p>;
   }
 
@@ -149,6 +180,9 @@ function MessagePartView({ part }: { part: MessagePart }) {
   if (part.type === "tool_result") {
     const isError = Boolean(part.payload.isError ?? part.payload.error);
     const content = String(part.payload.content ?? part.payload.output ?? "").slice(0, 1200);
+    const references = Array.isArray(part.payload.references)
+      ? part.payload.references.filter((item) => typeof item === "string").map((item) => String(item))
+      : [];
     return (
       <div
         className={`rounded-lg border px-3 py-2 text-xs ${
@@ -161,6 +195,16 @@ function MessagePartView({ part }: { part: MessagePart }) {
           {isError ? "✗" : "✓"} {String(part.payload.toolName ?? "result")}
         </div>
         <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px]">{content}</pre>
+        {references.length > 0 ? (
+          <div className="mt-2 space-y-1">
+            <div className="text-[10px] uppercase tracking-wide text-zinc-400">References</div>
+            {references.map((ref, index) => (
+              <div key={`${ref}-${index}`} className="text-[11px] text-zinc-300">
+                {ref}
+              </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     );
   }

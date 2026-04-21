@@ -772,6 +772,42 @@ export async function revokeAllGrantsForActor(
   );
 }
 
+export type ActorEffectiveGrant = {
+  grantId: string;
+  actorId: string;
+  resourceType: string;
+  resourceId: string | null;
+  capability: string;
+  expiresAt: string | null;
+  maxUses: number | null;
+  usesCount: number;
+  remainingUses: number | null;
+  constraints: Record<string, unknown>;
+  createdAt: string;
+  createdByActorId: string;
+};
+
+export async function listActorEffectiveGrants(
+  principal: MlPrincipal,
+  actorId: string,
+): Promise<ActorEffectiveGrant[]> {
+  const result = await mlRequest<{ grants: ActorEffectiveGrant[] }>(
+    `/v1/actors/${actorId}/grants`,
+    { principal },
+  );
+  return result.grants;
+}
+
+export async function revokeGrant(
+  principal: MlPrincipal,
+  grantId: string,
+): Promise<void> {
+  await mlRequest(`/v1/grants/${grantId}/revoke`, {
+    method: "POST",
+    principal,
+  });
+}
+
 export async function fetchAuditRows(
   principal: MlPrincipal,
   options: { actorId?: string; limit?: number } = {},

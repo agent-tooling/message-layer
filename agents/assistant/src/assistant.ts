@@ -28,6 +28,19 @@ async function ensureGeneralChannel(client: MessageLayerClient): Promise<string 
   return created.ok ? created.channelId : null;
 }
 
+async function sendArrivalMessage(client: MessageLayerClient, channelId: string): Promise<void> {
+  const posted = await client.appendMessage({
+    streamId: channelId,
+    streamType: "channel",
+    text: "I'm here!",
+  });
+  if (posted.ok) {
+    console.log(`[assistant] posted arrival message in #general (seq ${posted.streamSeq})`);
+    return;
+  }
+  console.log(`[assistant] could not post arrival message yet: ${posted.message}`);
+}
+
 function toWsUrl(baseUrl: string): string {
   const url = new URL("/v1/ws", baseUrl);
   return url.protocol === "https:" ? url.toString().replace(/^https:/, "wss:") : url.toString().replace(/^http:/, "ws:");
@@ -56,6 +69,120 @@ Do not respond if the message is clearly just from yourself or empty.`,
   );
   if (response.text) {
     console.log(`[assistant] ${response.text.trim()}`);
+  }
+  await publishAgentTrace(client, channelId, response);
+}
+
+function extractToolName(value: unknown): string {
+  const record = value as { payload?: { toolName?: unknown; name?: unknown }; toolName?: unknown; name?: unknown };
+  const raw = record.payload?.toolName ?? record.payload?.name ?? record.toolName ?? record.name;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw : "tool";
+}
+
+function extractToolArgs(value: unknown): unknown {
+  const record = value as { payload?: { args?: unknown; input?: unknown }; args?: unknown; input?: unknown };
+  return record.payload?.args ?? record.payload?.input ?? record.args ?? record.input ?? {};
+}
+
+function extractToolResult(value: unknown): unknown {
+  const record = value as { payload?: { result?: unknown; output?: unknown; content?: unknown }; result?: unknown; output?: unknown };
+  return record.payload?.result ?? record.payload?.output ?? record.payload?.content ?? record.result ?? record.output ?? value;
+}
+
+function stringifySafe(value: unknown, fallback = ""): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return fallback;
+  }
+}
+
+function collectStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item : stringifySafe(item)))
+    .filter((item) => item.trim().length > 0);
+}
+
+async function publishAgentTrace(
+  client: MessageLayerClient,
+  channelId: string,
+  response: unknown,
+): Promise<void> {
+  const responseRecord = response as {
+    text?: unknown;
+    toolCalls?: unknown;
+    toolResults?: unknown;
+    reasoning?: unknown;
+    thoughts?: unknown;
+    references?: unknown;
+    sources?: unknown;
+  };
+  const parts: Array<{ type: "text" | "tool_call" | "tool_result"; payload: Record<string, unknown> }> = [];
+  const toolCalls = Array.isArray(responseRecord.toolCalls) ? responseRecord.toolCalls : [];
+  const toolResults = Array.isArray(responseRecord.toolResults) ? responseRecord.toolResults : [];
+
+  const hasPostMessageCall = toolCalls.some((call) => extractToolName(call) === "post_message");
+  if (hasPostMessageCall) {
+    // post_message now embeds tool_call details directly in the posted message parts
+    return;
+  }
+  if (!hasPostMessageCall && typeof responseRecord.text === "string" && responseRecord.text.trim().length > 0) {
+    parts.push({ type: "text", payload: { text: responseRecord.text } });
+  }
+
+  for (const call of toolCalls) {
+    parts.push({
+      type: "tool_call",
+      payload: {
+        toolName: extractToolName(call),
+        args: extractToolArgs(call),
+      },
+    });
+  }
+  for (const result of toolResults) {
+    parts.push({
+      type: "tool_result",
+      payload: {
+        toolName: extractToolName(result),
+        content: stringifySafe(extractToolResult(result)),
+      },
+    });
+  }
+
+  const reasoningText =
+    typeof responseRecord.reasoning === "string"
+      ? responseRecord.reasoning
+      : typeof responseRecord.thoughts === "string"
+        ? responseRecord.thoughts
+        : "";
+  if (reasoningText.trim().length > 0) {
+    parts.push({
+      type: "text",
+      payload: { text: reasoningText, kind: "thinking" },
+    });
+  }
+
+  const references = collectStringArray(responseRecord.references).concat(collectStringArray(responseRecord.sources));
+  if (references.length > 0) {
+    parts.push({
+      type: "text",
+      payload: {
+        text: references.map((ref, i) => `${i + 1}. ${ref}`).join("\n"),
+        kind: "references",
+      },
+    });
+  }
+
+  if (parts.length === 0) return;
+  const appended = await client.appendParts({
+    streamId: channelId,
+    streamType: "channel",
+    parts,
+  });
+  if (!appended.ok) {
+    console.warn(`[assistant] could not append agent trace: ${appended.message}`);
   }
 }
 
@@ -93,6 +220,7 @@ If a tool reports pending approval, explain that the request is awaiting admin d
   if (!generalChannelId) {
     throw new Error("Could not find or create #general (likely waiting for permission approval).");
   }
+  await sendArrivalMessage(client, generalChannelId);
   console.log(`[assistant] subscribing to #general (${generalChannelId})`);
   await subscribeLoop({
     baseUrl: BASE_URL,

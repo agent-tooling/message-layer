@@ -1453,6 +1453,84 @@ export class MessageLayer {
     return Boolean(row);
   }
 
+  async listActorEffectiveGrants(
+    principal: Principal,
+    actorId: string,
+  ): Promise<
+    Array<{
+      grantId: string;
+      actorId: string;
+      resourceType: string;
+      resourceId: string | null;
+      capability: string;
+      expiresAt: string | null;
+      maxUses: number | null;
+      usesCount: number;
+      remainingUses: number | null;
+      constraints: Record<string, unknown>;
+      createdAt: string;
+      createdByActorId: string;
+    }>
+  > {
+    await this.assertOrgActor(principal);
+    if (
+      !principal.scopes.includes("grant:create") &&
+      !(await this.hasGrant(principal, "grant:create", "org", principal.orgId))
+    ) {
+      throw new PermissionError("missing grant:create", {
+        capability: "grant:create",
+        resourceType: "org",
+        resourceId: principal.orgId,
+      });
+    }
+    if (!actorId) throw new ValidationError("actorId is required");
+    const targetActor = await this.queryOne<{ org_id: string }>(
+      "SELECT org_id FROM actors WHERE id=?",
+      [actorId],
+    );
+    if (!targetActor) throw new NotFoundError(`actor not found: ${actorId}`);
+    if (targetActor.org_id !== principal.orgId) {
+      throw new PermissionError("actor is not in principal org");
+    }
+
+    const rows = await this.query<{
+      id: string;
+      actor_id: string;
+      resource_type: string;
+      resource_id: string | null;
+      capability: string;
+      expires_at: string | null;
+      constraints_json: unknown;
+      max_uses: number | null;
+      uses_count: number;
+      created_at: string;
+      created_by_actor_id: string;
+    }>(
+      `SELECT id,actor_id,resource_type,resource_id,capability,expires_at,constraints_json,max_uses,uses_count,created_at,created_by_actor_id
+         FROM grants
+        WHERE org_id=? AND actor_id=? AND active=1
+          AND (expires_at IS NULL OR expires_at>?)
+          AND (max_uses IS NULL OR uses_count < max_uses)
+        ORDER BY capability ASC, created_at DESC`,
+      [principal.orgId, actorId, this.ts()],
+    );
+    return rows.map((row) => ({
+      grantId: row.id,
+      actorId: row.actor_id,
+      resourceType: row.resource_type,
+      resourceId: row.resource_id,
+      capability: row.capability,
+      expiresAt: row.expires_at,
+      maxUses: row.max_uses,
+      usesCount: Number(row.uses_count ?? 0),
+      remainingUses:
+        row.max_uses === null ? null : Math.max(0, Number(row.max_uses) - Number(row.uses_count ?? 0)),
+      constraints: parseJsonRecord(row.constraints_json),
+      createdAt: row.created_at,
+      createdByActorId: row.created_by_actor_id,
+    }));
+  }
+
   async listOpenPermissionRequests(
     orgId: string,
     actorId?: string,

@@ -22,6 +22,14 @@ export type MlMessage = {
 };
 
 type PermissionDecision = "open" | "approved" | "denied";
+type MlPartType =
+  | "text"
+  | "tool_call"
+  | "tool_result"
+  | "artifact"
+  | "approval_request"
+  | "approval_response";
+type MlPart = { type: MlPartType; payload: Record<string, unknown> };
 
 export class MessageLayerClient {
   constructor(
@@ -178,6 +186,81 @@ export class MessageLayerClient {
     | { ok: false; message: string; requestId?: string; capability?: string }
   > {
     return this.appendMessageInternal(opts, true);
+  }
+
+  async appendParts(opts: {
+    streamId: string;
+    streamType: "channel" | "thread";
+    parts: MlPart[];
+    idempotencyKey?: string;
+  }): Promise<
+    | { ok: true; messageId: string; streamSeq: number }
+    | { ok: false; message: string; requestId?: string; capability?: string }
+  > {
+    return this.appendPartsInternal(opts, true);
+  }
+
+  private async appendPartsInternal(
+    opts: {
+      streamId: string;
+      streamType: "channel" | "thread";
+      parts: MlPart[];
+      idempotencyKey?: string;
+    },
+    waitOnDeny: boolean,
+  ): Promise<
+    | { ok: true; messageId: string; streamSeq: number }
+    | { ok: false; message: string; requestId?: string; capability?: string }
+  > {
+    const { status, body } = await this.call<{
+      messageId?: string;
+      streamSeq?: number;
+      denied?: boolean;
+      requestId?: string;
+      capability?: string;
+      error?: string;
+    }>("POST", "/v1/messages", {
+      streamId: opts.streamId,
+      streamType: opts.streamType,
+      parts: opts.parts,
+      idempotencyKey: opts.idempotencyKey ?? `assistant-parts-${randomUUID()}`,
+      autoRequestOnDeny: true,
+    });
+    const b = body as {
+      messageId?: string;
+      streamSeq?: number;
+      denied?: boolean;
+      requestId?: string;
+      capability?: string;
+      error?: string;
+    };
+    if (status === 200 && b.denied && b.requestId) {
+      if (waitOnDeny) {
+        const decision = await this.waitForPermissionDecision(b.requestId);
+        if (decision === "approved") {
+          return this.appendPartsInternal(opts, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            message: `request ${b.requestId} was denied by an admin`,
+            requestId: b.requestId,
+            capability: b.capability,
+          };
+        }
+        return {
+          ok: false,
+          message: `request ${b.requestId} is still pending admin approval`,
+          requestId: b.requestId,
+          capability: b.capability,
+        };
+      }
+      return { ok: false, message: "append denied", requestId: b.requestId, capability: b.capability };
+    }
+    if (status === 200 && typeof b.messageId === "string" && typeof b.streamSeq === "number") {
+      return { ok: true, messageId: b.messageId, streamSeq: b.streamSeq };
+    }
+    return { ok: false, message: b.error ?? `append failed: ${status}`, capability: b.capability };
   }
 
   private async appendMessageInternal(

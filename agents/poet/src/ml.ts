@@ -29,6 +29,14 @@ export type MlMessage = {
   createdAt: string;
   parts: Array<{ type: string; payload: Record<string, unknown> }>;
 };
+type MlPartType =
+  | "text"
+  | "tool_call"
+  | "tool_result"
+  | "artifact"
+  | "approval_request"
+  | "approval_response";
+type MlPart = { type: MlPartType; payload: Record<string, unknown> };
 
 export type MlAppendResult =
   | { ok: true; messageId: string; streamSeq: number; idempotent: boolean }
@@ -206,6 +214,60 @@ export class MessageLayerClient {
         message: b.error ?? "permission denied",
         capability: b.capability ?? "message:append",
       };
+    }
+    if (status === 404) {
+      return { ok: false, code: "not_found", message: b.error ?? "stream not found" };
+    }
+    return {
+      ok: false,
+      code: "unknown",
+      message: b.error ?? `append failed: HTTP ${status}`,
+    };
+  }
+
+  async appendParts(opts: {
+    streamId: string;
+    streamType: "channel" | "thread";
+    parts: MlPart[];
+    idempotencyKey?: string;
+  }): Promise<MlAppendResult> {
+    const { status, body } = await this.call<{
+      messageId?: string;
+      streamSeq?: number;
+      idempotent?: boolean;
+      denied?: boolean;
+      requestId?: string;
+      capability?: string;
+      code?: string;
+      error?: string;
+    }>("POST", "/v1/messages", {
+      streamId: opts.streamId,
+      streamType: opts.streamType,
+      parts: opts.parts,
+      idempotencyKey: opts.idempotencyKey ?? `poet-parts-${randomUUID()}`,
+      autoRequestOnDeny: true,
+    });
+    const b = body as {
+      messageId?: string;
+      streamSeq?: number;
+      idempotent?: boolean;
+      denied?: boolean;
+      requestId?: string;
+      capability?: string;
+      code?: string;
+      error?: string;
+    };
+    if (status === 200 && b.denied === true && b.requestId) {
+      return {
+        ok: false,
+        code: "permission_denied",
+        message: "append denied; auto-opened permission request",
+        requestId: b.requestId,
+        capability: b.capability ?? "message:append",
+      };
+    }
+    if (status === 200 && typeof b.messageId === "string" && typeof b.streamSeq === "number") {
+      return { ok: true, messageId: b.messageId, streamSeq: b.streamSeq, idempotent: Boolean(b.idempotent) };
     }
     if (status === 404) {
       return { ok: false, code: "not_found", message: b.error ?? "stream not found" };

@@ -12,6 +12,7 @@
 
 import { Agent } from "@mastra/core/agent";
 import { bootstrapAgent } from "./bootstrap.js";
+import type { MessageLayerClient } from "./ml.js";
 import { makePoetTools } from "./tools.js";
 
 const args = parseArgs(process.argv.slice(2));
@@ -192,6 +193,102 @@ function extractToolArgs(call: unknown): unknown {
 function extractToolResult(result: unknown): unknown {
   const r = result as { payload?: { result?: unknown }; result?: unknown };
   return r.payload?.result ?? r.result ?? result;
+}
+
+function stringifySafe(value: unknown, fallback = ""): string {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return fallback;
+  }
+}
+
+function extractResolvedChannelId(result: unknown): string | null {
+  const payload = extractToolResult(result);
+  if (!payload || typeof payload !== "object") return null;
+  const record = payload as { resolvedChannelId?: unknown; channelId?: unknown };
+  if (typeof record.resolvedChannelId === "string") return record.resolvedChannelId;
+  if (typeof record.channelId === "string") return record.channelId;
+  return null;
+}
+
+function collectStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item : stringifySafe(item)))
+    .filter((item) => item.trim().length > 0);
+}
+
+async function publishPoetTrace(client: MessageLayerClient, response: unknown): Promise<void> {
+  const responseRecord = response as {
+    text?: unknown;
+    toolCalls?: unknown;
+    toolResults?: unknown;
+    reasoning?: unknown;
+    thoughts?: unknown;
+    references?: unknown;
+    sources?: unknown;
+  };
+  const toolCalls = Array.isArray(responseRecord.toolCalls) ? responseRecord.toolCalls : [];
+  const toolResults = Array.isArray(responseRecord.toolResults) ? responseRecord.toolResults : [];
+  const channelFromTool = toolResults.map(extractResolvedChannelId).find((id): id is string => Boolean(id));
+  let channelId = channelFromTool ?? null;
+  if (!channelId) {
+    const channels = await client.listChannels();
+    channelId = channels.find((channel) => channel.name === "poems")?.id ?? null;
+  }
+  if (!channelId) return;
+
+  const hasPostMessageCall = toolCalls.some((call) => extractToolName(call) === "post_message");
+  if (hasPostMessageCall) {
+    // post_message now embeds tool_call details directly in the posted message parts
+    return;
+  }
+  const parts: Array<{ type: "text" | "tool_call" | "tool_result"; payload: Record<string, unknown> }> = [];
+  if (!hasPostMessageCall && typeof responseRecord.text === "string" && responseRecord.text.trim().length > 0) {
+    parts.push({ type: "text", payload: { text: responseRecord.text } });
+  }
+  for (const call of toolCalls) {
+    parts.push({
+      type: "tool_call",
+      payload: { toolName: extractToolName(call), args: extractToolArgs(call) },
+    });
+  }
+  for (const result of toolResults) {
+    parts.push({
+      type: "tool_result",
+      payload: { toolName: extractToolName(result), content: stringifySafe(extractToolResult(result)) },
+    });
+  }
+
+  const reasoningText =
+    typeof responseRecord.reasoning === "string"
+      ? responseRecord.reasoning
+      : typeof responseRecord.thoughts === "string"
+        ? responseRecord.thoughts
+        : "";
+  if (reasoningText.trim().length > 0) {
+    parts.push({ type: "text", payload: { text: reasoningText, kind: "thinking" } });
+  }
+
+  const references = collectStringArray(responseRecord.references).concat(collectStringArray(responseRecord.sources));
+  if (references.length > 0) {
+    parts.push({
+      type: "text",
+      payload: { text: references.map((ref, i) => `${i + 1}. ${ref}`).join("\n"), kind: "references" },
+    });
+  }
+
+  if (parts.length === 0) return;
+  const traceResult = await client.appendParts({
+    streamId: channelId,
+    streamType: "channel",
+    parts,
+  });
+  if (!traceResult.ok) {
+    log("trace", `${colors.yellow}failed to append trace: ${traceResult.message}${colors.reset}`);
+  }
 }
 
 type ParsedArgs = {

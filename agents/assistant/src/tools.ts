@@ -77,10 +77,19 @@ export function makeAssistantTools(client: MessageLayerClient) {
         }
         channelId = match.id;
       }
-      const posted = await client.appendMessage({
+      const posted = await client.appendParts({
         streamId: channelId,
         streamType: "channel",
-        text,
+        parts: [
+          { type: "text", payload: { text } },
+          {
+            type: "tool_call",
+            payload: {
+              toolName: "post_message",
+              args: { channel, text },
+            },
+          },
+        ],
       });
       if (posted.ok) {
         return {
