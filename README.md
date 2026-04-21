@@ -56,6 +56,44 @@ STORAGE_PATH=postgresql://user:pass@localhost:5432/mydb \
 node --enable-source-maps dist/server.js
 ```
 
+### Securing a public deployment
+
+When the server is reachable over the public internet, gate it with a shared secret using the built-in `api-key-header-auth` plugin:
+
+```bash
+MESSAGE_LAYER_API_KEY=your-secret \
+PLUGINS=api-key-header-auth \
+node dist/server.js
+```
+
+All `/v1/*` requests — including the normally-unauthenticated `createOrg` and `createActor` endpoints — will be rejected with `401` unless the correct key is present. Pass `strict: true` to also reject requests when the env variable is missing (useful in production to catch misconfiguration):
+
+```typescript
+await startServer({
+  plugins: [{ name: "api-key-header-auth", options: { strict: true } }],
+});
+```
+
+Send the key from the SDK:
+
+```typescript
+const client = new MessageLayerClient({
+  baseUrl: "https://ml.example.com",
+  apiKey: process.env.MESSAGE_LAYER_API_KEY,
+  principal: { ... },
+});
+```
+
+The default header name is `x-api-key`. Override it on both sides if needed:
+
+```typescript
+// Server
+{ name: "api-key-header-auth", options: { headerName: "x-ml-secret" } }
+
+// Client
+new MessageLayerClient({ ..., apiKey: "...", apiKeyHeader: "x-ml-secret" })
+```
+
 ### Environment variables
 
 | Variable | Default | Description |
@@ -68,6 +106,7 @@ node --enable-source-maps dist/server.js
 | `ARTIFACTS_MAX_BYTES` | `10485760` (10 MB) | Max artifact size in bytes |
 | `PLUGINS` | _(none)_ | Comma-separated plugin names, e.g. `request-logging,webhooks` |
 | `ENABLE_WEBSOCKET` | `true` | Enable WebSocket upgrade |
+| `MESSAGE_LAYER_API_KEY` | _(none)_ | Shared secret for `api-key-header-auth` plugin |
 | `MESSAGE_LAYER_CONFIG` | _(none)_ | Full config as JSON string (overrides individual env vars) |
 
 ---

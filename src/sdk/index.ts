@@ -189,6 +189,26 @@ export interface MessageLayerClientOptions {
   baseUrl: string;
   /** Authenticated principal. Optional for unauthenticated operations (createOrg, createActor). */
   principal?: Principal;
+  /**
+   * Shared secret sent on every request to satisfy the `api-key-header-auth`
+   * plugin when the server is exposed over the public internet.
+   *
+   * Matches the server's `MESSAGE_LAYER_API_KEY` env variable.
+   * The header name defaults to `x-api-key` and can be overridden with
+   * `apiKeyHeader` if the plugin was configured with a custom `headerName`.
+   *
+   * @example
+   * ```typescript
+   * const client = new MessageLayerClient({
+   *   baseUrl: "https://ml.example.com",
+   *   apiKey: process.env.MESSAGE_LAYER_API_KEY,
+   *   principal: { ... },
+   * });
+   * ```
+   */
+  apiKey?: string;
+  /** Header name the server expects the API key in. Defaults to `x-api-key`. */
+  apiKeyHeader?: string;
   /** Override the global fetch function (useful for testing or custom transports). */
   fetch?: typeof globalThis.fetch;
 }
@@ -202,11 +222,15 @@ export interface MessageLayerClientOptions {
 export class MessageLayerClient {
   private readonly baseUrl: string;
   private readonly principal: Principal | undefined;
+  private readonly apiKey: string | undefined;
+  private readonly apiKeyHeader: string;
   private readonly _fetch: typeof globalThis.fetch;
 
   constructor(options: MessageLayerClientOptions) {
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
     this.principal = options.principal;
+    this.apiKey = options.apiKey;
+    this.apiKeyHeader = options.apiKeyHeader ?? "x-api-key";
     this._fetch = options.fetch ?? globalThis.fetch;
   }
 
@@ -223,6 +247,9 @@ export class MessageLayerClient {
     };
     if (!options.noAuth && this.principal) {
       headers["x-principal"] = JSON.stringify(this.principal);
+    }
+    if (this.apiKey) {
+      headers[this.apiKeyHeader] = this.apiKey;
     }
     const response = await this._fetch(`${this.baseUrl}${path}`, {
       method: options.method ?? "GET",
@@ -592,11 +619,12 @@ export class MessageLayerClient {
     const wsUrl = this.baseUrl
       .replace(/^http/, "ws")
       .replace(/^https/, "wss");
-    const principalParam = this.principal
-      ? `?principal=${encodeURIComponent(JSON.stringify(this.principal))}`
-      : "";
+    const params = new URLSearchParams();
+    if (this.principal) params.set("principal", JSON.stringify(this.principal));
+    if (this.apiKey) params.set(this.apiKeyHeader, this.apiKey);
+    const qs = params.toString();
     const WS = options.WebSocket ?? globalThis.WebSocket;
-    const ws = new WS(`${wsUrl}/v1/ws${principalParam}`);
+    const ws = new WS(`${wsUrl}/v1/ws${qs ? `?${qs}` : ""}`);
 
     ws.onopen = () => {
       ws.send(
