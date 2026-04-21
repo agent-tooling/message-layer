@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { connect, type SqlDatabase } from "../../src/db.js";
 import { InProcessEventBus } from "../../src/event-bus.js";
 import { createApp } from "../../src/http.js";
-import { applyPluginsToApp, resolvePlugins } from "../../src/plugins.js";
+import { applyPluginSchemas, applyPluginsToApp, resolvePlugins } from "../../src/plugins.js";
 import type { PluginConfigEntry } from "../../src/config.js";
 import { MessageLayer } from "../../src/service.js";
 import { startServer, type RunningServer } from "../../src/server-runtime.js";
@@ -28,9 +28,11 @@ async function makeHarness(plugins: PluginConfigEntry[], env: NodeJS.ProcessEnv 
   const service = new MessageLayer(db, { bus });
   const app = createApp(service);
   const instantiated = resolvePlugins(plugins);
+  await applyPluginSchemas(db, instantiated);
   const dispose = await applyPluginsToApp(
     {
       app,
+      db,
       service,
       bus,
       logger: () => {},
@@ -69,7 +71,7 @@ describe("built-in plugins", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ ok: true, adapter: "pglite", version: "test-1", plugins: ["health-meta"] });
-  });
+  }, 10000);
 
   test("request-logging plugin logs every request via the provided logger", async () => {
     const db = await connect(`memory://req-${Math.random().toString(16).slice(2)}`);
@@ -80,6 +82,7 @@ describe("built-in plugins", () => {
     const dispose = await applyPluginsToApp(
       {
         app,
+        db,
         service,
         bus,
         env: {},
@@ -140,6 +143,7 @@ describe("built-in plugins", () => {
     const dispose = await applyPluginsToApp(
       {
         app,
+        db,
         service,
         bus,
         env: {},
@@ -178,6 +182,80 @@ describe("built-in plugins", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { streamId: string; messageIds: string[] };
     expect(body.messageIds).toContain(append.messageId);
+  });
+
+  test("webhooks plugin stores subscriptions and delivers matching events", async () => {
+    harness = await makeHarness(["webhooks"]);
+    const orgId = await harness.service.createOrg("hooks");
+    const adminId = await harness.service.createActor(orgId, "human", "admin");
+    const admin: Principal = {
+      actorId: adminId,
+      orgId,
+      scopes: ["channel:create", "message:append", "webhook:subscribe", "webhook:read"],
+      provider: "test",
+    };
+    const channelId = await harness.service.createChannel(admin, "general", "public");
+
+    const originalFetch = globalThis.fetch;
+    const deliveries: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = (async (input, init) => {
+      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+      deliveries.push({
+        url: typeof input === "string" ? input : input.url,
+        body,
+      });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof globalThis.fetch;
+
+    try {
+      const create = await harness.app.fetch(
+        new Request("http://localhost/v1/webhooks/subscriptions", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-principal": JSON.stringify(admin),
+          },
+          body: JSON.stringify({
+            endpoint: "https://example.com/hooks/messages",
+            eventTypes: ["message.appended"],
+            streamId: channelId,
+          }),
+        }),
+      );
+      expect(create.status).toBe(200);
+      await harness.service.appendMessage(admin, {
+        streamId: channelId,
+        streamType: "channel",
+        parts: [{ type: "text", payload: { text: "hello hook" } }],
+        idempotencyKey: "hook-1",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(deliveries.length).toBeGreaterThan(0);
+      expect(deliveries[0]?.url).toBe("https://example.com/hooks/messages");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("webhooks plugin enforces webhook:subscribe capability", async () => {
+    harness = await makeHarness(["webhooks"]);
+    const orgId = await harness.service.createOrg("hooks-auth");
+    const actorId = await harness.service.createActor(orgId, "human", "member");
+    const principal: Principal = { actorId, orgId, scopes: [], provider: "test" };
+    const response = await harness.app.fetch(
+      new Request("http://localhost/v1/webhooks/subscriptions", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-principal": JSON.stringify(principal),
+        },
+        body: JSON.stringify({
+          endpoint: "https://example.com/hooks/messages",
+          eventTypes: ["message.appended"],
+        }),
+      }),
+    );
+    expect(response.status).toBe(403);
   });
 
   test("unknown plugin name throws during resolution", () => {

@@ -16,7 +16,9 @@
     "client:nextjs": "pnpm --dir clients/nextjs run dev",
     "client:nextjs:build": "pnpm --dir clients/nextjs run build",
     "agent:poet": "pnpm --dir agents/poet run start",
-    "agent:poet:once": "pnpm --dir agents/poet run once"
+    "agent:poet:once": "pnpm --dir agents/poet run once",
+    "agent:assistant": "pnpm --dir agents/assistant run start",
+    "agent:assistant:once": "pnpm --dir agents/assistant run once"
   },
   "dependencies": {
     "@electric-sql/pglite": "0.3.11",

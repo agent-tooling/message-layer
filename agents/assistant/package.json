@@ -1,0 +1,26 @@
+{
+  "name": "assistant-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mastra workspace manager agent that subscribes to #general and replies to new messages.",
+  "scripts": {
+    "start": "tsx --env-file-if-exists=.env src/assistant.ts",
+    "once": "tsx --env-file-if-exists=.env src/assistant.ts --once",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mastra/core": "1.24.1",
+    "ws": "8.18.3",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.16.5",
+    "@types/ws": "8.18.1",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

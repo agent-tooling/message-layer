@@ -71,6 +71,9 @@ in [`docs/hero-flow.md`](./docs/hero-flow.md).
 | `GET` | `/v1/streams/:id/artifacts` | List artifacts attached to a stream |
 | `DELETE` | `/v1/artifacts/:id` | Soft-delete an artifact |
 | `POST` | `/v1/clients` | Register a client endpoint |
+| `POST` | `/v1/webhooks/subscriptions` | Create webhook subscription (via `webhooks` plugin) |
+| `GET` | `/v1/webhooks/subscriptions` | List webhook subscriptions (via `webhooks` plugin) |
+| `PATCH` | `/v1/webhooks/subscriptions/:id` | Enable/disable webhook subscription (via `webhooks` plugin) |
 | `GET` | `/v1/audit/rows` | Export audit log (requires `audit:read` scope) |
 | `GET` | `/v1/audit/verify` | Verify audit hash chain |
 

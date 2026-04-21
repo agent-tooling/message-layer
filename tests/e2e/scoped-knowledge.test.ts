@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { connect, type SqlDatabase } from "../../src/db.js";
 import { InProcessEventBus } from "../../src/event-bus.js";
 import { createApp } from "../../src/http.js";
-import { applyPluginsToApp, resolvePlugins } from "../../src/plugins.js";
+import { applyPluginSchemas, applyPluginsToApp, resolvePlugins } from "../../src/plugins.js";
 import { MessageLayer } from "../../src/service.js";
 import type { Principal } from "../../src/types.js";
 
@@ -20,9 +20,12 @@ async function makeHarness(): Promise<PluginHarness> {
   const bus = new InProcessEventBus();
   const service = new MessageLayer(db, { bus });
   const app = createApp(service);
+  const plugins = resolvePlugins(["scoped-knowledge"]);
+  await applyPluginSchemas(db, plugins);
   const dispose = await applyPluginsToApp(
     {
       app,
+      db,
       service,
       bus,
       logger: () => {},
@@ -35,7 +38,7 @@ async function makeHarness(): Promise<PluginHarness> {
         websocket: false,
       },
     },
-    resolvePlugins(["scoped-knowledge"]),
+    plugins,
   );
   return {
     db,

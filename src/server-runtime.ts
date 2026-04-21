@@ -4,7 +4,7 @@ import { loadServerConfig, type ServerConfig } from "./config.js";
 import { connect, type SqlDatabase } from "./db.js";
 import { InProcessEventBus, type EventBus } from "./event-bus.js";
 import { createApp } from "./http.js";
-import { applyPluginsToApp, resolvePlugins, type PluginLogger } from "./plugins.js";
+import { applyPluginSchemas, applyPluginsToApp, resolvePlugins, type PluginLogger } from "./plugins.js";
 import { MessageLayer, type MessageLayerService } from "./service.js";
 import { createStorageAdapter, type StorageAdapter } from "./storage.js";
 import { attachWebSocketServer, type WebSocketServerHandle } from "./ws.js";
@@ -53,8 +53,9 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
 
   const app = createApp(service);
   const plugins = resolvePlugins(config.plugins);
+  await applyPluginSchemas(db, plugins, logger);
   const disposePlugins = await applyPluginsToApp(
-    { app, service, bus, logger, env, config },
+    { app, db, service, bus, logger, env, config },
     plugins,
   );
 

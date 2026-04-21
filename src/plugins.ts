@@ -1,8 +1,10 @@
 import type { Hono } from "hono";
 import type { ServerConfig } from "./config.js";
+import type { SqlDatabase } from "./db.js";
 import type { EventBus } from "./event-bus.js";
 import type { MessageLayerService } from "./service.js";
 import { scopedKnowledgePlugin } from "./plugins/scoped-knowledge.js";
+import { webhookPlugin } from "./plugins/webhooks.js";
 import type { DomainEvent } from "./types.js";
 
 export type PluginLogger = (message: string) => unknown;
@@ -12,6 +14,7 @@ export type FetchWrapper = (next: FetchHandler) => FetchHandler;
 
 export type PluginRuntimeContext = {
   app: Hono;
+  db: SqlDatabase;
   service: MessageLayerService;
   bus: EventBus;
   config: ServerConfig;
@@ -20,8 +23,14 @@ export type PluginRuntimeContext = {
   wrapFetch: (wrapper: FetchWrapper) => void;
 };
 
+export type PluginSchemaDef = {
+  name: string;
+  sql: string[];
+};
+
 export type ServerPlugin = {
   name: string;
+  schemaSql?: PluginSchemaDef | PluginSchemaDef[];
   setup?: (ctx: PluginRuntimeContext) => void | Promise<void>;
   registerRoutes?: (ctx: PluginRuntimeContext) => void | Promise<void>;
   onEvent?: (event: DomainEvent, ctx: PluginRuntimeContext) => void | Promise<void>;
@@ -162,6 +171,7 @@ export const builtInPluginFactories: Record<string, PluginFactory> = {
   "event-logger": eventLoggerPlugin,
   "in-memory-knowledge": inMemoryKnowledgePlugin,
   "scoped-knowledge": scopedKnowledgePlugin,
+  webhooks: webhookPlugin,
 };
 
 export type PluginSpec = string | { name: string; options?: Record<string, unknown> };
@@ -216,6 +226,26 @@ export async function applyPluginsToApp(ctx: Omit<PluginRuntimeContext, "wrapFet
       await plugin.dispose?.();
     }
   };
+}
+
+export async function applyPluginSchemas(
+  db: SqlDatabase,
+  plugins: ServerPlugin[],
+  logger: PluginLogger = () => {},
+): Promise<void> {
+  for (const plugin of plugins) {
+    const defs = plugin.schemaSql
+      ? (Array.isArray(plugin.schemaSql) ? plugin.schemaSql : [plugin.schemaSql])
+      : [];
+    for (const def of defs) {
+      for (const statement of def.sql) {
+        const sql = statement.trim();
+        if (!sql) continue;
+        await db.query(sql);
+      }
+      logger(`[plugin-schema] ${plugin.name}/${def.name} applied`);
+    }
+  }
 }
 
 export const createPlugins = resolvePlugins;
