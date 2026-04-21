@@ -247,6 +247,7 @@ See [authorization.md](./authorization.md) for semantics.
 - `GET /v1/grants/check?actorId&capability` → `{ hasGrant: boolean }`
 - `POST /v1/permission-requests` — `{ action, resourceType, resourceId }` → `{ requestId }`
 - `GET /v1/permission-requests?actorId` → `{ requests: [...] }`
+- `GET /v1/permission-requests/:requestId` → `{ request: { status, action, resourceType, resourceId, context, createdAt, resolvedAt, grantId, ... } }`
 - `POST /v1/permission-requests/:requestId/resolve` — `{ approve, notes? }` → `{ ok: true }`
 
 ## Artifacts

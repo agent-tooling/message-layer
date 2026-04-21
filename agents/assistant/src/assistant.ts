@@ -85,7 +85,7 @@ async function run(): Promise<void> {
     instructions: `You are a workspace manager assistant.
 Use tools to inspect channels, create channels, and post messages.
 When a new user message appears in #general, reply briefly and helpfully.
-If a tool returns a permission request id, mention that approval is needed and stop retrying.`,
+If a tool reports pending approval, explain that the request is awaiting admin decision.`,
     tools,
   });
 

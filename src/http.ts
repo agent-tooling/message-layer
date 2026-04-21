@@ -438,6 +438,20 @@ export function createApp(service: MessageLayerService): Hono {
     }
   });
 
+  app.get("/v1/permission-requests/:requestId", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const request = await service.getPermissionRequest(auth.principal.orgId, c.req.param("requestId"));
+      if (!request) {
+        return c.json({ error: `permission request not found: ${c.req.param("requestId")}`, code: "NOT_FOUND" }, 404);
+      }
+      return c.json({ request });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
   app.post("/v1/permission-requests/:requestId/resolve", async (c) => {
     const auth = authed(c);
     if ("response" in auth) return auth.response;

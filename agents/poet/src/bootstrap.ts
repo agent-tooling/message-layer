@@ -98,16 +98,27 @@ export async function bootstrapAgent(opts: {
   orgId: string;
   displayName: string;
 }): Promise<BootstrapResult> {
-  if (!opts.orgId) {
-    throw new Error(
-      "missing org id — pass `--org-id <id>` on the command line or set MESSAGE_LAYER_ORG_ID in the environment",
-    );
-  }
-
   const client = new MessageLayerClient(opts.baseUrl);
+  const appOrigin = new URL(opts.appUrl).origin;
+
+  const resolveWorkspace = async (): Promise<{ orgId: string; hasWorkspace: boolean }> => {
+    const setup = await fetch(`${appOrigin}/api/team/setup`, { cache: "no-store" });
+    if (!setup.ok) {
+      throw new Error(`failed to load workspace setup info (${setup.status})`);
+    }
+    const payload = (await setup.json()) as { hasWorkspace?: boolean; orgId?: string | null };
+    const orgId = (payload.orgId ?? "").trim();
+    return { orgId, hasWorkspace: payload.hasWorkspace === true };
+  };
+
+  const workspace = await resolveWorkspace();
+  if (!workspace.hasWorkspace || !workspace.orgId) {
+    throw new Error("workspace is not initialized yet. Open the Next.js app and complete setup.");
+  }
+  const targetOrgId = workspace.orgId;
 
   const cached = loadState();
-  if (cached && cached.orgId === opts.orgId) {
+  if (cached && cached.orgId === targetOrgId) {
     const principal: Principal = {
       actorId: cached.actorId,
       orgId: cached.orgId,
@@ -118,59 +129,76 @@ export async function bootstrapAgent(opts: {
       return { principal, client, reused: true };
     }
   }
-  const appOrigin = new URL(opts.appUrl).origin;
-  const join = loadJoinRequestState();
-  if (join && join.orgId === opts.orgId) {
-    const poll = await fetch(
-      `${appOrigin}/api/team/agents/join-requests/${join.requestId}?secret=${encodeURIComponent(join.requestSecret)}`,
-      { cache: "no-store" },
-    );
-    const status = (await poll.json()) as {
-      status?: "open" | "approved" | "denied";
-      actorId?: string | null;
-      note?: string | null;
-    };
-    if (status.status === "approved" && status.actorId) {
-      const principal: Principal = {
-        actorId: status.actorId,
-        orgId: opts.orgId,
-        scopes: [],
-        provider: "poet-agent",
-      };
-      saveState({ orgId: opts.orgId, actorId: principal.actorId, provider: principal.provider, createdAt: new Date().toISOString() });
-      return { principal, client, reused: false };
-    }
-    if (status.status === "denied") {
-      throw new Error(
-        `agent join request ${join.requestId} was denied${status.note ? `: ${status.note}` : ""}.`,
+
+  const waitForJoinApproval = async (requestId: string, requestSecret: string): Promise<string> => {
+    const pollMs = Number(process.env.AGENT_JOIN_POLL_MS ?? "5000");
+    for (;;) {
+      const poll = await fetch(
+        `${appOrigin}/api/team/agents/join-requests/${requestId}?secret=${encodeURIComponent(requestSecret)}`,
+        { cache: "no-store" },
       );
+      const status = (await poll.json()) as {
+        status?: "open" | "approved" | "denied";
+        actorId?: string | null;
+        note?: string | null;
+      };
+      if (status.status === "approved" && status.actorId) {
+        return status.actorId;
+      }
+      if (status.status === "denied") {
+        throw new Error(
+          `agent join request ${requestId} was denied${status.note ? `: ${status.note}` : ""}.`,
+        );
+      }
+      console.log(
+        `[poet] waiting for admin approval on join request ${requestId} (polling every ${pollMs}ms)`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, pollMs));
     }
-    throw new Error(
-      `agent join request ${join.requestId} is pending admin approval. Resolve it in /admin/agents, then restart the poet.`,
-    );
+  };
+
+  const join = loadJoinRequestState();
+  if (join && join.orgId === targetOrgId) {
+    const actorId = await waitForJoinApproval(join.requestId, join.requestSecret);
+    const principal: Principal = {
+      actorId,
+      orgId: targetOrgId,
+      scopes: [],
+      provider: "poet-agent",
+    };
+    saveState({ orgId: targetOrgId, actorId: principal.actorId, provider: principal.provider, createdAt: new Date().toISOString() });
+    return { principal, client, reused: false };
   }
 
   const request = await fetch(`${appOrigin}/api/team/agents/join-requests`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ displayName: opts.displayName, orgId: opts.orgId }),
+    body: JSON.stringify({ displayName: opts.displayName }),
   });
   const payload = (await request.json()) as {
     requestId?: string;
     requestSecret?: string;
+    orgId?: string;
     error?: string;
   };
   if (!request.ok || !payload.requestId || !payload.requestSecret) {
     throw new Error(payload.error ?? `failed to create agent join request (${request.status})`);
   }
+  const joinOrgId = (payload.orgId ?? targetOrgId).trim() || targetOrgId;
   saveJoinRequestState({
     requestId: payload.requestId,
     requestSecret: payload.requestSecret,
-    orgId: opts.orgId,
+    orgId: joinOrgId,
     displayName: opts.displayName,
     createdAt: new Date().toISOString(),
   });
-  throw new Error(
-    `agent join request ${payload.requestId} submitted. Approve it in /admin/agents, then restart the poet.`,
-  );
+  const actorId = await waitForJoinApproval(payload.requestId, payload.requestSecret);
+  const principal: Principal = {
+    actorId,
+    orgId: joinOrgId,
+    scopes: [],
+    provider: "poet-agent",
+  };
+  saveState({ orgId: joinOrgId, actorId: principal.actorId, provider: principal.provider, createdAt: new Date().toISOString() });
+  return { principal, client, reused: false };
 }

@@ -176,6 +176,14 @@ describe("HTTP / end-to-end workflow", () => {
     expect(autoReq.body.denied).toBe(true);
     expect(autoReq.body.requestId).toMatch(/^[0-9a-f]{32}$/);
 
+    const pendingRequest = await harness.http.get<{ request: { status: string; action: string } }>(
+      `/v1/permission-requests/${autoReq.body.requestId}`,
+      admin,
+    );
+    expect(pendingRequest.status).toBe(200);
+    expect(pendingRequest.body.request.status).toBe("open");
+    expect(pendingRequest.body.request.action).toBe("message:append");
+
     // Admin approves -> user can append
     const resolved = await harness.http.post<{ status: string; grantId: string }>(
       `/v1/permission-requests/${autoReq.body.requestId}/resolve`,
@@ -184,6 +192,14 @@ describe("HTTP / end-to-end workflow", () => {
     );
     expect(resolved.status).toBe(200);
     expect(resolved.body.status).toBe("approved");
+
+    const resolvedRequest = await harness.http.get<{ request: { status: string; grantId: string | null } }>(
+      `/v1/permission-requests/${autoReq.body.requestId}`,
+      admin,
+    );
+    expect(resolvedRequest.status).toBe(200);
+    expect(resolvedRequest.body.request.status).toBe("approved");
+    expect(resolvedRequest.body.request.grantId).toBeTruthy();
 
     const approved = await harness.http.post<{ messageId: string }>(
       "/v1/messages",

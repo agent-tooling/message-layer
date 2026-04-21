@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { MessageCard } from "@/components/message-card";
@@ -117,6 +118,10 @@ export function TeamWorkspace() {
   function requestContextDetails(request: PermissionRequest): string[] {
     const context = request.context ?? {};
     const details: string[] = [];
+    const tool = context.tool;
+    if (typeof tool === "string" && tool.length > 0) {
+      details.push(`tool: ${tool}`);
+    }
     const channelName = context.requestedName;
     const channelVisibility = context.requestedVisibility;
     if (typeof channelName === "string" && channelName.length > 0) {
@@ -124,6 +129,14 @@ export function TeamWorkspace() {
     }
     if (typeof channelVisibility === "string" && channelVisibility.length > 0) {
       details.push(`visibility: ${channelVisibility}`);
+    }
+    const legacyName = context.name;
+    const legacyVisibility = context.visibility;
+    if (details.length === 0 && typeof legacyName === "string" && legacyName.length > 0) {
+      details.push(`channel: #${legacyName}`);
+      if (typeof legacyVisibility === "string" && legacyVisibility.length > 0) {
+        details.push(`visibility: ${legacyVisibility}`);
+      }
     }
     const streamType = context.streamType;
     const streamId = context.streamId;
@@ -147,6 +160,15 @@ export function TeamWorkspace() {
       }
     }
     return details;
+  }
+
+  function requestContextJson(context: Record<string, unknown> | undefined): string | null {
+    if (!context || Object.keys(context).length === 0) return null;
+    try {
+      return JSON.stringify(context, null, 2);
+    } catch {
+      return null;
+    }
   }
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -590,6 +612,22 @@ export function TeamWorkspace() {
                 {approvals.length} approval{approvals.length === 1 ? "" : "s"} pending
               </span>
             ) : null}
+            <details className="group relative">
+              <summary className="list-none cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800">
+                Admin ▾
+              </summary>
+              <div className="absolute right-0 z-20 mt-2 min-w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-lg shadow-black/50">
+                <Link href="/admin" className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100">
+                  Overview
+                </Link>
+                <Link href="/admin/agents" className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100">
+                  Agents
+                </Link>
+                <Link href="/admin/activity" className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100">
+                  Activity
+                </Link>
+              </div>
+            </details>
             <button
               className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
               onClick={() => authClient.signOut()}
@@ -610,6 +648,7 @@ export function TeamWorkspace() {
                 const actor = actorsById[request.actorId];
                 const capability = request.action.replace(/^tool:execute:/, "");
                 const detailLines = requestContextDetails(request);
+                const contextJson = requestContextJson(request.context);
                 return (
                   <li
                     key={request.requestId}
@@ -630,6 +669,11 @@ export function TeamWorkspace() {
                           {detail}
                         </div>
                       ))}
+                      {contextJson ? (
+                        <pre className="mt-1 max-h-28 overflow-auto rounded border border-zinc-800 bg-zinc-900/70 p-2 text-[10px] text-zinc-400">
+                          {contextJson}
+                        </pre>
+                      ) : null}
                     </div>
                     <div className="flex gap-2">
                       <button

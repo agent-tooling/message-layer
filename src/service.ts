@@ -1485,6 +1485,53 @@ export class MessageLayer {
     }));
   }
 
+  async getPermissionRequest(
+    orgId: string,
+    requestId: string,
+  ): Promise<{
+    requestId: string;
+    actorId: string;
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    status: PermissionRequestStatus;
+    context: PermissionRequestContext;
+    createdAt: string;
+    resolvedAt: string | null;
+    grantId: string | null;
+  } | null> {
+    const row = await this.queryOne<{
+      id: string;
+      actor_id: string;
+      action: string;
+      resource_type: string;
+      resource_id: string | null;
+      status: PermissionRequestStatus;
+      request_context_json: unknown;
+      created_at: string;
+      resolved_at: string | null;
+      grant_id: string | null;
+    }>(
+      `SELECT id,actor_id,action,resource_type,resource_id,status,request_context_json,created_at,resolved_at,grant_id
+       FROM permission_requests
+       WHERE org_id=? AND id=?`,
+      [orgId, requestId],
+    );
+    if (!row) return null;
+    return {
+      requestId: row.id,
+      actorId: row.actor_id,
+      action: row.action,
+      resourceType: row.resource_type,
+      resourceId: row.resource_id,
+      status: row.status,
+      context: parseJsonRecord(row.request_context_json) as PermissionRequestContext,
+      createdAt: row.created_at,
+      resolvedAt: row.resolved_at,
+      grantId: row.grant_id,
+    };
+  }
+
   // ── artifacts ────────────────────────────────────────────────────────────
 
   /**

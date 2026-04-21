@@ -9,6 +9,7 @@ export async function GET() {
   return NextResponse.json({
     hasWorkspace: hasWorkspace(),
     workspaceName: getSetting("workspace_name") ?? null,
+    orgId: getSetting("default_org_id") ?? null,
   });
 }
 

@@ -21,6 +21,8 @@ export type MlMessage = {
   parts: Array<{ type: string; payload: Record<string, unknown> }>;
 };
 
+type PermissionDecision = "open" | "approved" | "denied";
+
 export class MessageLayerClient {
   constructor(
     private readonly baseUrl: string,
@@ -55,6 +57,39 @@ export class MessageLayerClient {
     return { status: res.status, body: parsed as T };
   }
 
+  private async getPermissionRequestStatus(requestId: string): Promise<PermissionDecision> {
+    try {
+      const { status, body } = await this.call<{ request?: { status?: PermissionDecision } }>(
+        "GET",
+        `/v1/permission-requests/${requestId}`,
+      );
+      if (status === 200) {
+        const requestStatus = (body as { request?: { status?: PermissionDecision } }).request?.status;
+        if (requestStatus === "open" || requestStatus === "approved" || requestStatus === "denied") {
+          return requestStatus;
+        }
+      }
+    } catch {
+      // best effort: treat as still pending and keep polling
+    }
+    return "open";
+  }
+
+  private async waitForPermissionDecision(
+    requestId: string,
+    opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<PermissionDecision> {
+    const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
+    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const status = await this.getPermissionRequestStatus(requestId);
+      if (status === "approved" || status === "denied") return status;
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+    return "open";
+  }
+
   async createActor(orgId: string, actorType: "human" | "agent" | "app", displayName: string): Promise<string> {
     const { status, body } = await this.call<{ actorId: string }>("POST", "/v1/actors", {
       orgId,
@@ -75,6 +110,17 @@ export class MessageLayerClient {
     | { ok: true; channelId: string }
     | { ok: false; message: string; requestId?: string; capability?: string }
   > {
+    return this.createChannelInternal(name, visibility, true);
+  }
+
+  private async createChannelInternal(
+    name: string,
+    visibility: "public" | "private",
+    waitOnDeny: boolean,
+  ): Promise<
+    | { ok: true; channelId: string }
+    | { ok: false; message: string; requestId?: string; capability?: string }
+  > {
     const { status, body } = await this.call<{ channelId?: string; error?: string; capability?: string }>(
       "POST",
       "/v1/channels",
@@ -89,8 +135,34 @@ export class MessageLayerClient {
         capability,
         "org",
         this.principal?.orgId ?? null,
-        { kind: "channel.create", name, visibility },
+        {
+          kind: "channel.create",
+          tool: "create_channel",
+          requestedName: name,
+          requestedVisibility: visibility,
+          args: { name, visibility },
+        },
       );
+      if (waitOnDeny && requestId) {
+        const decision = await this.waitForPermissionDecision(requestId);
+        if (decision === "approved") {
+          return this.createChannelInternal(name, visibility, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            message: `request ${requestId} was denied by an admin`,
+            requestId,
+            capability,
+          };
+        }
+        return {
+          ok: false,
+          message: `request ${requestId} is still pending admin approval`,
+          requestId,
+          capability,
+        };
+      }
       return { ok: false, message: (body as { error?: string }).error ?? "permission denied", requestId, capability };
     }
     return { ok: false, message: (body as { error?: string }).error ?? `createChannel failed: ${status}` };
@@ -102,6 +174,21 @@ export class MessageLayerClient {
     text: string;
     idempotencyKey?: string;
   }): Promise<
+    | { ok: true; messageId: string; streamSeq: number }
+    | { ok: false; message: string; requestId?: string; capability?: string }
+  > {
+    return this.appendMessageInternal(opts, true);
+  }
+
+  private async appendMessageInternal(
+    opts: {
+      streamId: string;
+      streamType: "channel" | "thread";
+      text: string;
+      idempotencyKey?: string;
+    },
+    waitOnDeny: boolean,
+  ): Promise<
     | { ok: true; messageId: string; streamSeq: number }
     | { ok: false; message: string; requestId?: string; capability?: string }
   > {
@@ -128,6 +215,26 @@ export class MessageLayerClient {
       error?: string;
     };
     if (status === 200 && b.denied && b.requestId) {
+      if (waitOnDeny) {
+        const decision = await this.waitForPermissionDecision(b.requestId);
+        if (decision === "approved") {
+          return this.appendMessageInternal(opts, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            message: `request ${b.requestId} was denied by an admin`,
+            requestId: b.requestId,
+            capability: b.capability,
+          };
+        }
+        return {
+          ok: false,
+          message: `request ${b.requestId} is still pending admin approval`,
+          requestId: b.requestId,
+          capability: b.capability,
+        };
+      }
       return { ok: false, message: "append denied", requestId: b.requestId, capability: b.capability };
     }
     if (status === 200 && typeof b.messageId === "string" && typeof b.streamSeq === "number") {

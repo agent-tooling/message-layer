@@ -126,7 +126,13 @@ export class MessageLayerClient {
         capability,
         "org",
         this.principal?.orgId ?? null,
-        { kind: "channel.create", name, visibility },
+        {
+          kind: "channel.create",
+          tool: "create_channel",
+          requestedName: name,
+          requestedVisibility: visibility,
+          args: { name, visibility },
+        },
       );
       return {
         ok: false,

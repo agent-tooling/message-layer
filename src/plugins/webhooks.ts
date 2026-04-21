@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { PermissionError, ValidationError, eventTypeSchema, principalSchema, type DomainEvent, type EventType, type Principal } from "../types.js";
+import { isWebhookSupportedEventType } from "../event-support.js";
 import type { ServerPlugin } from "../plugins.js";
 
 type WebhookSubscriptionRow = {
@@ -15,9 +16,13 @@ type WebhookSubscriptionRow = {
   created_at: string;
 };
 
+const webhookEventTypeSchema = eventTypeSchema.refine((eventType) => isWebhookSupportedEventType(eventType), {
+  message: "event type is not supported by webhook transport",
+});
+
 const createSubscriptionBody = z.object({
   endpoint: z.string().url(),
-  eventTypes: z.array(eventTypeSchema).min(1),
+  eventTypes: z.array(webhookEventTypeSchema).min(1),
   streamId: z.string().min(1).nullable().optional(),
   secret: z.string().min(8).max(256).optional(),
 });
@@ -260,6 +265,7 @@ export function webhookPlugin(options?: Record<string, unknown>): ServerPlugin {
       });
     },
     async onEvent(event, ctx) {
+      if (!isWebhookSupportedEventType(event.type)) return;
       const rows = await ctx.db.query<WebhookSubscriptionRow>(
         `SELECT id,org_id,actor_id,endpoint,event_types_json,stream_id,secret,enabled,created_at
          FROM webhook_subscriptions

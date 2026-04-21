@@ -16,7 +16,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "displayName is required" }, { status: 400 });
     }
     const defaultOrgId = getSetting("default_org_id");
-    const orgId = (body.orgId ?? defaultOrgId ?? "").trim();
+    const orgId = (defaultOrgId ?? "").trim();
     if (!orgId) {
       return NextResponse.json({ error: "workspace is not initialized yet" }, { status: 409 });
     }
@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       requestId,
       requestSecret,
+      orgId,
       status: "open",
       message: "join request submitted for admin approval",
     });

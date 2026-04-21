@@ -11,6 +11,7 @@ import {
   type Principal,
   type StreamType,
 } from "./types.js";
+import { isWebSocketEventDeliverable } from "./event-support.js";
 
 export type WebSocketServerHandle = {
   wss: WebSocketServer;
@@ -174,11 +175,13 @@ async function handleConnection(
 
         let lastSeq = fromSeq;
         for (const e of replay) {
+          if (!isWebSocketEventDeliverable(e)) continue;
           safeSend({ type: "event", event: e });
           if (e.streamSeq !== null) lastSeq = Math.max(lastSeq, e.streamSeq);
         }
 
         const unsubscribe = bus.subscribe((event: DomainEvent) => {
+          if (!isWebSocketEventDeliverable(event)) return;
           if (event.streamId !== msg.streamId) return;
           if (event.orgId !== principal.orgId) return;
           if (event.streamSeq !== null && event.streamSeq <= lastSeq) return;

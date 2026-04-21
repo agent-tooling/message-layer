@@ -116,6 +116,10 @@ describe("permission request context", () => {
     const [row] = await harness.service.listOpenPermissionRequests(orgId);
     expect(row.requestId).toBe(requestId);
     expect(row.context).toEqual({ kind: "channel.create", name: "poems", visibility: "public" });
+
+    const request = await harness.service.getPermissionRequest(orgId, requestId);
+    expect(request?.status).toBe("open");
+    expect(request?.context).toEqual({ kind: "channel.create", name: "poems", visibility: "public" });
   });
 
   test("permission_request.created event carries the context through to plugins", async () => {
