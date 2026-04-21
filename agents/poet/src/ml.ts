@@ -119,7 +119,15 @@ export class MessageLayerClient {
     }
     if (status === 403) {
       const capability = (body as { capability?: string }).capability ?? "channel:create";
-      const requestId = await this.openPermissionRequest(capability, "org", this.principal?.orgId ?? null);
+      // Include the agent's actual intent (channel name + visibility) so the
+      // human reviewer can tell at a glance what they're approving — this is
+      // the "purpose-aware permissions" point in AGENTS.md rule 5.
+      const requestId = await this.openPermissionRequest(
+        capability,
+        "org",
+        this.principal?.orgId ?? null,
+        { kind: "channel.create", name, visibility },
+      );
       return {
         ok: false,
         code: "permission_denied",
@@ -207,12 +215,14 @@ export class MessageLayerClient {
     action: string,
     resourceType: string,
     resourceId: string | null,
+    context: Record<string, unknown> = {},
   ): Promise<string | undefined> {
     try {
       const { status, body } = await this.call<{ requestId: string }>("POST", "/v1/permission-requests", {
         action,
         resourceType,
         resourceId,
+        context,
       });
       if (status === 200 && typeof (body as { requestId: string }).requestId === "string") {
         return (body as { requestId: string }).requestId;

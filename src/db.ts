@@ -105,9 +105,14 @@ CREATE TABLE IF NOT EXISTS grants (
   capability TEXT NOT NULL,
   expires_at TEXT,
   constraints_json TEXT NOT NULL DEFAULT '{}',
+  max_uses INTEGER,
+  uses_count INTEGER NOT NULL DEFAULT 0,
   active INTEGER NOT NULL DEFAULT 1,
   created_by_actor_id TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  revoked_at TEXT,
+  revoked_by_actor_id TEXT,
+  revocation_reason TEXT
 );
 
 CREATE TABLE IF NOT EXISTS permission_requests (
@@ -118,6 +123,7 @@ CREATE TABLE IF NOT EXISTS permission_requests (
   resource_type TEXT NOT NULL,
   resource_id TEXT,
   status TEXT NOT NULL CHECK (status IN ('open', 'approved', 'denied')),
+  request_context_json TEXT NOT NULL DEFAULT '{}',
   resolution_notes TEXT,
   resolver_actor_id TEXT,
   grant_id TEXT,
@@ -180,6 +186,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_org ON audit_events(org_id, audit_seq);
 CREATE INDEX IF NOT EXISTS idx_memberships_actor ON memberships(org_id, actor_id);
 CREATE INDEX IF NOT EXISTS idx_memberships_channel ON memberships(org_id, channel_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_stream ON artifacts(org_id, stream_id);
+CREATE INDEX IF NOT EXISTS idx_grants_lookup ON grants(org_id, actor_id, capability, resource_type, active);
 `;
 
 export type SqlValue = string | number | null;

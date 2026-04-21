@@ -41,6 +41,23 @@ const updateCursorBody = z.object({
   lastSeenSeq: z.number().int().nonnegative(),
   lastAckSeq: z.number().int().nonnegative(),
 });
+const createPermissionRequestBody = z.object({
+  action: z.string().min(1),
+  resourceType: z.string().min(1),
+  resourceId: z.union([z.string(), z.null()]).optional(),
+  context: z.record(z.unknown()).optional(),
+});
+const resolvePermissionRequestBody = z.object({
+  approve: z.boolean(),
+  notes: z.string().optional(),
+  /** ISO-8601 timestamp; when set on an approve, the issued grant expires at this instant. */
+  expiresAt: z.union([z.string(), z.null()]).optional(),
+  /** Positive integer; `1` is the "approve once" case. `null` (or omitted) means unlimited. */
+  maxUses: z.union([z.number().int().positive(), z.null()]).optional(),
+});
+const revokeAllGrantsBody = z.object({
+  reason: z.string().optional(),
+});
 const createGrantBody = z.object({
   actorId: z.string().min(1),
   resourceType: z.string().min(1),
@@ -48,15 +65,7 @@ const createGrantBody = z.object({
   capability: z.string().min(1),
   expiresAt: z.union([z.string(), z.null()]).optional(),
   constraints: z.record(z.unknown()).optional(),
-});
-const createPermissionRequestBody = z.object({
-  action: z.string().min(1),
-  resourceType: z.string().min(1),
-  resourceId: z.union([z.string(), z.null()]).optional(),
-});
-const resolvePermissionRequestBody = z.object({
-  approve: z.boolean(),
-  notes: z.string().optional(),
+  maxUses: z.union([z.number().int().positive(), z.null()]).optional(),
 });
 const channelMemberBody = z.object({
   actorId: z.string().min(1),
@@ -364,6 +373,7 @@ export function createApp(service: MessageLayerService): Hono {
         body.capability,
         body.expiresAt ?? null,
         body.constraints ?? {},
+        body.maxUses ?? null,
       );
       return c.json({ grantId });
     } catch (e) {
@@ -408,6 +418,7 @@ export function createApp(service: MessageLayerService): Hono {
         body.action,
         body.resourceType,
         body.resourceId ?? null,
+        body.context ?? {},
       );
       return c.json({ requestId });
     } catch (e) {
@@ -436,7 +447,11 @@ export function createApp(service: MessageLayerService): Hono {
         auth.principal,
         c.req.param("requestId"),
         body.approve,
-        body.notes ?? "",
+        {
+          notes: body.notes,
+          expiresAt: body.expiresAt ?? null,
+          maxUses: body.maxUses ?? null,
+        },
       );
       return c.json({ ok: true, ...result });
     } catch (e) {
@@ -551,8 +566,31 @@ export function createApp(service: MessageLayerService): Hono {
       if (!auth.principal.scopes.includes("audit:read")) {
         return c.json({ error: "missing audit:read scope", code: "PERMISSION_DENIED" }, 403);
       }
-      const rows = await service.auditRows(auth.principal.orgId);
+      const actorId = c.req.query("actorId") ?? undefined;
+      const limitRaw = c.req.query("limit");
+      const limit = limitRaw ? Math.max(1, Math.min(5000, Number(limitRaw))) : undefined;
+      const rows = await service.auditRows(auth.principal.orgId, { actorId, limit });
       return c.json({ rows });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  // Revoke every live grant held by one actor in one call. Org-level
+  // admin operation ("kick agent"). Requires `grant:create` like any other
+  // grant mutation.
+  app.post("/v1/actors/:actorId/revoke-grants", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      let reason = "";
+      const raw = await c.req.text();
+      if (raw.length > 0) {
+        const parsed = revokeAllGrantsBody.parse(JSON.parse(raw));
+        reason = parsed.reason ?? "";
+      }
+      const result = await service.revokeAllGrantsForActor(auth.principal, c.req.param("actorId"), reason);
+      return c.json(result);
     } catch (e) {
       return handleError(c, e);
     }

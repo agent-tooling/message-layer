@@ -5,8 +5,8 @@
   "type": "module",
   "description": "A tiny Mastra-powered poet agent that writes into #poems every minute to exercise the message-layer permission flow.",
   "scripts": {
-    "start": "tsx src/poet.ts",
-    "once": "tsx src/poet.ts --once",
+    "start": "tsx --env-file-if-exists=.env src/poet.ts",
+    "once": "tsx --env-file-if-exists=.env src/poet.ts --once",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -12,12 +12,14 @@ import {
   PermissionError,
   ValidationError,
   type ActorType,
+  type ApprovalOptions,
   type AuditRow,
   type DomainEvent,
   type EventType,
   type MessagePart,
   type MessagePartType,
   type MessageRecord,
+  type PermissionRequestContext,
   type PermissionRequestStatus,
   type Principal,
   type StreamType,
@@ -54,6 +56,35 @@ const EVENT_TYPE_SET: ReadonlySet<EventType> = new Set(EVENT_TYPES);
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
 
+/**
+ * Build a bounded, non-sensitive preview of an append-message attempt so a
+ * human reviewing the resulting permission request can see exactly what
+ * the agent wanted to say (or what tool call it was about to make) without
+ * approving blindly. AGENTS.md rule 5: permissions are purpose-aware.
+ */
+function buildAppendRequestContext(
+  input: AppendMessageInput,
+  parts: MessagePart[],
+): PermissionRequestContext {
+  const preview = parts.map((p, idx) => {
+    if (p.type === "text") {
+      const text = typeof p.payload?.text === "string" ? (p.payload.text as string) : "";
+      return { index: idx, type: p.type, text: text.length > 500 ? `${text.slice(0, 500)}…` : text };
+    }
+    // Tool calls / artifact refs / approval_* — surface the type + shallow keys.
+    const keys = Object.keys(p.payload ?? {}).slice(0, 8);
+    return { index: idx, type: p.type, keys };
+  });
+  return {
+    kind: "message.append",
+    streamType: input.streamType,
+    streamId: input.streamId,
+    idempotencyKey: input.idempotencyKey,
+    partCount: parts.length,
+    parts: preview,
+  };
+}
+
 export function stableJson(input: unknown): string {
   if (input === null || input === undefined) return JSON.stringify(input ?? null);
   if (typeof input !== "object") return JSON.stringify(input);
@@ -62,6 +93,32 @@ export function stableJson(input: unknown): string {
   }
   const entries = Object.entries(input as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
   return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+}
+
+/**
+ * True when the given actor id appears anywhere in an audit row's payload
+ * under a known attribution field. Covers the actor that performed the
+ * action (`actorId`, `createdByActorId`, etc.) and the actor the action
+ * was performed on (e.g. revoking someone else's grants). The audit UI
+ * uses this to render per-actor activity without rebuilding SQL.
+ */
+function actorAppearsIn(row: AuditRow, target: string): boolean {
+  const p = row.payload;
+  const candidates = [
+    p.actorId,
+    p.createdByActorId,
+    p.resolverActorId,
+    p.revokedByActorId,
+    p.redactedByActorId,
+    p.promotedByActorId,
+    p.deletedByActorId,
+    p.addedByActorId,
+    p.removedByActorId,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c === target) return true;
+  }
+  return false;
 }
 
 export function parseJsonRecord(value: unknown): Record<string, unknown> {
@@ -260,6 +317,20 @@ export class MessageLayer {
     }
   }
 
+  /**
+   * Non-consuming capability check. Returns true when the principal either
+   * carries the capability as a scope (infinite use, never consumed) or
+   * has a live grant for it. A grant is considered live when it is
+   * `active`, not yet expired, and either has no `max_uses` cap or has
+   * at least one remaining use.
+   *
+   * Callers that are about to *perform* an action (append a message,
+   * create a channel, upload an artifact) should use
+   * {@link consumeGrantInTx} inside the surrounding DB transaction
+   * instead of this read-only check, so that "approve once" grants
+   * burn exactly one use per successful action — even under concurrent
+   * calls from the same agent.
+   */
   private async hasGrant(
     principal: Principal,
     capability: string,
@@ -272,10 +343,84 @@ export class MessageLayer {
        WHERE org_id=? AND actor_id=? AND capability=? AND resource_type=? AND active=1
          AND (resource_id IS NULL OR resource_id=?)
          AND (expires_at IS NULL OR expires_at>?)
+         AND (max_uses IS NULL OR uses_count < max_uses)
        LIMIT 1`,
       [principal.orgId, principal.actorId, capability, resourceType, resourceId, this.ts()],
     );
     return Boolean(row);
+  }
+
+  /**
+   * Atomically consume one "use" of a matching grant inside the caller's
+   * transaction. Returns `{ consumed: true, grantId }` when a scope or a
+   * live grant backed the call, `{ consumed: false }` otherwise.
+   *
+   * Scopes never consume — they represent principal-carried capabilities
+   * (admin login, service account) that aren't rate-limited.
+   *
+   * The SQL is written as a single `UPDATE ... WHERE id = (SELECT ...)
+   * RETURNING id` so concurrent callers cannot both consume the same
+   * single-use grant. When `max_uses` is reached the row's `uses_count`
+   * hits `max_uses` and the next select filters it out.
+   */
+  private async consumeGrantInTx(
+    tx: DbClient,
+    principal: Principal,
+    capability: string,
+    resourceType: string,
+    resourceId: string | null,
+  ): Promise<{ consumed: boolean; grantId: string | null; viaScope: boolean; events: DomainEvent[] }> {
+    if (principal.scopes.includes(capability)) {
+      return { consumed: true, grantId: null, viaScope: true, events: [] };
+    }
+    const now = this.ts();
+    const updated = await this.txQuery<{ id: string; max_uses: number | null; uses_count: number }>(
+      tx,
+      `UPDATE grants
+         SET uses_count = uses_count + 1
+       WHERE id = (
+         SELECT id FROM grants
+          WHERE org_id=? AND actor_id=? AND capability=? AND resource_type=? AND active=1
+            AND (resource_id IS NULL OR resource_id=?)
+            AND (expires_at IS NULL OR expires_at>?)
+            AND (max_uses IS NULL OR uses_count < max_uses)
+          ORDER BY created_at ASC
+          LIMIT 1
+       )
+       RETURNING id, max_uses, uses_count`,
+      [principal.orgId, principal.actorId, capability, resourceType, resourceId, now],
+    );
+    const row = updated[0];
+    if (!row) return { consumed: false, grantId: null, viaScope: false, events: [] };
+
+    const events: DomainEvent[] = [];
+    // When the last use has been consumed, flip `active=0` so read paths
+    // and the `/v1/grants/check` endpoint reflect reality without having
+    // to re-derive it from counters. The emitted `grant.revoked` event is
+    // returned to the caller so it can be published on the shared bus
+    // alongside whatever action event triggered this consumption — a
+    // plugin sees "message.appended" and "grant.revoked(autoRevoked=true)"
+    // in the same logical step.
+    if (row.max_uses !== null && Number(row.uses_count) >= Number(row.max_uses)) {
+      await this.txQuery(
+        tx,
+        "UPDATE grants SET active=0, revoked_at=?, revocation_reason=? WHERE id=?",
+        [now, "max_uses exhausted", row.id],
+      );
+      events.push(
+        await this.emit(tx, {
+          orgId: principal.orgId,
+          eventType: "grant.revoked",
+          payload: {
+            orgId: principal.orgId,
+            grantId: row.id,
+            reason: "max_uses exhausted",
+            autoRevoked: true,
+          },
+        }),
+      );
+    }
+    return { consumed: true, grantId: row.id, viaScope: false, events };
   }
 
   private async nextSeqTx(tx: DbClient, streamId: string): Promise<number> {
@@ -464,6 +609,11 @@ export class MessageLayer {
     }
     const channelId = this.id();
     const events = await this.db.tx(async (tx) => {
+      const consume = await this.consumeGrantInTx(tx, principal, "channel:create", "org", principal.orgId);
+      if (!consume.consumed) {
+        throw new PermissionError("missing channel:create", { capability: "channel:create", resourceType: "org", resourceId: principal.orgId });
+      }
+      const extra = consume.events;
       await this.txQuery(tx, "INSERT INTO channels(id,org_id,name,visibility,created_by_actor_id,created_at) VALUES (?,?,?,?,?,?)", [
         channelId,
         principal.orgId,
@@ -489,7 +639,7 @@ export class MessageLayer {
         eventType: "membership.updated",
         payload: { orgId: principal.orgId, actorId: principal.actorId, role: "owner", scope: "channel", channelId },
       });
-      return [created, membership];
+      return [...extra, created, membership];
     });
     for (const e of events) this.bus.publish(e);
     return channelId;
@@ -602,6 +752,10 @@ export class MessageLayer {
     }
     const threadId = this.id();
     const events = await this.db.tx(async (tx) => {
+      const consume = await this.consumeGrantInTx(tx, principal, "thread:create", "channel", channelId);
+      if (!consume.consumed) {
+        throw new PermissionError("missing thread:create", { capability: "thread:create", resourceType: "channel", resourceId: channelId });
+      }
       await this.txQuery(
         tx,
         "INSERT INTO threads(id,org_id,channel_id,parent_message_id,visibility,created_by_actor_id,created_at) VALUES (?,?,?,?,?,?,?)",
@@ -613,7 +767,7 @@ export class MessageLayer {
         eventType: "thread.created",
         payload: { orgId: principal.orgId, threadId, channelId, parentMessageId, visibility, createdByActorId: principal.actorId },
       });
-      return [event];
+      return [...consume.events, event];
     });
     for (const e of events) this.bus.publish(e);
     return threadId;
@@ -730,9 +884,18 @@ export class MessageLayer {
     // Privacy: must be in org + stream must be readable (membership for private).
     await this.assertStreamReadable(principal, input.streamId, streamType);
 
+    // Fast read-only check to decide between "deny" and "open permission
+    // request". The actual grant consumption happens inside the transaction
+    // below so single-use grants burn atomically with the insert.
     if (!(await this.hasGrant(principal, "message:append", streamType, input.streamId))) {
       if (input.autoRequestOnDeny) {
-        const requestId = await this.createPermissionRequest(principal, "message:append", streamType, input.streamId);
+        const requestId = await this.createPermissionRequest(
+          principal,
+          "message:append",
+          streamType,
+          input.streamId,
+          buildAppendRequestContext(input, parts),
+        );
         return {
           denied: true,
           requestId,
@@ -760,6 +923,18 @@ export class MessageLayer {
           events: [] as DomainEvent[],
         };
       }
+
+      // Atomically consume one use of a matching grant (no-op when the
+      // principal carries the capability as a scope).
+      const consume = await this.consumeGrantInTx(tx, principal, "message:append", streamType, input.streamId);
+      if (!consume.consumed) {
+        throw new PermissionError("missing message:append", {
+          capability: "message:append",
+          resourceType: streamType,
+          resourceId: input.streamId,
+        });
+      }
+      const extraEvents = consume.events;
 
       const messageId = this.id();
       const streamSeq = await this.nextSeqTx(tx, input.streamId);
@@ -794,7 +969,7 @@ export class MessageLayer {
       });
       return {
         result: { messageId, streamSeq, idempotent: false } as AppendMessageSuccess,
-        events: [event],
+        events: [event, ...extraEvents],
       };
     });
 
@@ -822,11 +997,8 @@ export class MessageLayer {
     if (Number(row.redacted) === 1) return;
 
     const streamType = row.stream_type as StreamType;
-    const allowed =
-      row.actor_id === principal.actorId ||
-      principal.scopes.includes("message:redact") ||
-      (await this.hasGrant(principal, "message:redact", streamType, row.stream_id));
-    if (!allowed) {
+    const isAuthor = row.actor_id === principal.actorId;
+    if (!isAuthor && !(await this.hasGrant(principal, "message:redact", streamType, row.stream_id))) {
       throw new PermissionError("missing message:redact", {
         capability: "message:redact",
         resourceType: streamType,
@@ -834,7 +1006,19 @@ export class MessageLayer {
       });
     }
 
-    const event = await this.db.tx(async (tx) => {
+    const events = await this.db.tx(async (tx) => {
+      const extra: DomainEvent[] = [];
+      if (!isAuthor) {
+        const consume = await this.consumeGrantInTx(tx, principal, "message:redact", streamType, row.stream_id);
+        if (!consume.consumed) {
+          throw new PermissionError("missing message:redact", {
+            capability: "message:redact",
+            resourceType: streamType,
+            resourceId: row.stream_id,
+          });
+        }
+        extra.push(...consume.events);
+      }
       const redactedAt = this.ts();
       await this.txQuery(
         tx,
@@ -842,7 +1026,7 @@ export class MessageLayer {
         [redactedAt, principal.actorId, reason, messageId],
       );
       await this.txQuery(tx, "DELETE FROM message_parts WHERE message_id=?", [messageId]);
-      return this.emit(tx, {
+      const redacted = await this.emit(tx, {
         orgId: principal.orgId,
         streamId: row.stream_id,
         eventType: "message.redacted",
@@ -855,8 +1039,9 @@ export class MessageLayer {
           reason,
         },
       });
+      return [...extra, redacted];
     });
-    this.bus.publish(event);
+    for (const e of events) this.bus.publish(e);
   }
 
   async listMessages(
@@ -1023,17 +1208,24 @@ export class MessageLayer {
     capability: string,
     expiresAt: string | null = null,
     constraints: Record<string, unknown> = {},
+    maxUses: number | null = null,
   ): Promise<string> {
     await this.assertOrgActor(principal);
     if (!principal.scopes.includes("grant:create") && !(await this.hasGrant(principal, "grant:create", "org", principal.orgId))) {
       throw new PermissionError("missing grant:create", { capability: "grant:create", resourceType: "org", resourceId: principal.orgId });
     }
     if (!actorId || !resourceType || !capability) throw new ValidationError("actorId, resourceType, capability required");
+    if (maxUses !== null && (!Number.isInteger(maxUses) || maxUses < 1)) {
+      throw new ValidationError("maxUses must be a positive integer or null");
+    }
+    if (expiresAt !== null && Number.isNaN(Date.parse(expiresAt))) {
+      throw new ValidationError("expiresAt must be an ISO-8601 timestamp or null");
+    }
     const grantId = this.id();
     const event = await this.db.tx(async (tx) => {
       await this.txQuery(
         tx,
-        "INSERT INTO grants(id,org_id,actor_id,resource_type,resource_id,capability,expires_at,constraints_json,active,created_by_actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,1,?,?)",
+        "INSERT INTO grants(id,org_id,actor_id,resource_type,resource_id,capability,expires_at,constraints_json,max_uses,uses_count,active,created_by_actor_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,0,1,?,?)",
         [
           grantId,
           principal.orgId,
@@ -1043,6 +1235,7 @@ export class MessageLayer {
           capability,
           expiresAt,
           stableJson(constraints),
+          maxUses,
           principal.actorId,
           this.ts(),
         ],
@@ -1050,14 +1243,24 @@ export class MessageLayer {
       return this.emit(tx, {
         orgId: principal.orgId,
         eventType: "grant.created",
-        payload: { orgId: principal.orgId, grantId, actorId, resourceType, resourceId, capability, createdByActorId: principal.actorId },
+        payload: {
+          orgId: principal.orgId,
+          grantId,
+          actorId,
+          resourceType,
+          resourceId,
+          capability,
+          expiresAt,
+          maxUses,
+          createdByActorId: principal.actorId,
+        },
       });
     });
     this.bus.publish(event);
     return grantId;
   }
 
-  async revokeGrant(principal: Principal, grantId: string): Promise<void> {
+  async revokeGrant(principal: Principal, grantId: string, reason = ""): Promise<void> {
     await this.assertOrgActor(principal);
     if (!principal.scopes.includes("grant:create") && !(await this.hasGrant(principal, "grant:create", "org", principal.orgId))) {
       throw new PermissionError("missing grant:create", { capability: "grant:create", resourceType: "org", resourceId: principal.orgId });
@@ -1069,14 +1272,77 @@ export class MessageLayer {
     if (!existing) throw new NotFoundError(`grant not found: ${grantId}`);
 
     const event = await this.db.tx(async (tx) => {
-      await this.txQuery(tx, "UPDATE grants SET active=0 WHERE id=? AND org_id=?", [grantId, principal.orgId]);
+      await this.txQuery(
+        tx,
+        "UPDATE grants SET active=0, revoked_at=?, revoked_by_actor_id=?, revocation_reason=? WHERE id=? AND org_id=?",
+        [this.ts(), principal.actorId, reason, grantId, principal.orgId],
+      );
       return this.emit(tx, {
         orgId: principal.orgId,
         eventType: "grant.revoked",
-        payload: { orgId: principal.orgId, grantId, revokedByActorId: principal.actorId },
+        payload: { orgId: principal.orgId, grantId, revokedByActorId: principal.actorId, reason },
       });
     });
     this.bus.publish(event);
+  }
+
+  /**
+   * "Kick an agent": revoke every live grant held by a single actor in one
+   * shot, emitting one `grant.revoked` event per affected grant so plugins
+   * (notifications, audit UIs) see each revocation individually. Requires
+   * `grant:create` on the org — same capability a resolver needs.
+   */
+  async revokeAllGrantsForActor(
+    principal: Principal,
+    actorId: string,
+    reason = "",
+  ): Promise<{ revokedGrantIds: string[] }> {
+    await this.assertOrgActor(principal);
+    if (!principal.scopes.includes("grant:create") && !(await this.hasGrant(principal, "grant:create", "org", principal.orgId))) {
+      throw new PermissionError("missing grant:create", { capability: "grant:create", resourceType: "org", resourceId: principal.orgId });
+    }
+    if (!actorId) throw new ValidationError("actorId is required");
+    const targetActor = await this.queryOne<{ org_id: string }>("SELECT org_id FROM actors WHERE id=?", [actorId]);
+    if (!targetActor) throw new NotFoundError(`actor not found: ${actorId}`);
+    if (targetActor.org_id !== principal.orgId) {
+      throw new PermissionError("actor is not in principal org");
+    }
+
+    const active = await this.query<{ id: string }>(
+      "SELECT id FROM grants WHERE org_id=? AND actor_id=? AND active=1",
+      [principal.orgId, actorId],
+    );
+    const ids = active.map((r) => r.id);
+    if (ids.length === 0) return { revokedGrantIds: [] };
+
+    const events = await this.db.tx(async (tx) => {
+      const out: DomainEvent[] = [];
+      const now = this.ts();
+      for (const id of ids) {
+        await this.txQuery(
+          tx,
+          "UPDATE grants SET active=0, revoked_at=?, revoked_by_actor_id=?, revocation_reason=? WHERE id=? AND org_id=?",
+          [now, principal.actorId, reason, id, principal.orgId],
+        );
+        out.push(
+          await this.emit(tx, {
+            orgId: principal.orgId,
+            eventType: "grant.revoked",
+            payload: {
+              orgId: principal.orgId,
+              grantId: id,
+              actorId,
+              revokedByActorId: principal.actorId,
+              reason,
+              bulk: true,
+            },
+          }),
+        );
+      }
+      return out;
+    });
+    for (const e of events) this.bus.publish(e);
+    return { revokedGrantIds: ids };
   }
 
   async createPermissionRequest(
@@ -1084,6 +1350,7 @@ export class MessageLayer {
     action: string,
     resourceType: string,
     resourceId: string | null,
+    context: PermissionRequestContext = {},
   ): Promise<string> {
     await this.assertOrgActor(principal);
     if (!action || !resourceType) throw new ValidationError("action and resourceType required");
@@ -1091,13 +1358,21 @@ export class MessageLayer {
     const event = await this.db.tx(async (tx) => {
       await this.txQuery(
         tx,
-        "INSERT INTO permission_requests(id,org_id,actor_id,action,resource_type,resource_id,status,created_at) VALUES (?,?,?,?,?,?,?,?)",
-        [requestId, principal.orgId, principal.actorId, action, resourceType, resourceId, "open", this.ts()],
+        "INSERT INTO permission_requests(id,org_id,actor_id,action,resource_type,resource_id,status,request_context_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        [requestId, principal.orgId, principal.actorId, action, resourceType, resourceId, "open", stableJson(context), this.ts()],
       );
       return this.emit(tx, {
         orgId: principal.orgId,
         eventType: "permission_request.created",
-        payload: { orgId: principal.orgId, requestId, actorId: principal.actorId, action, resourceType, resourceId },
+        payload: {
+          orgId: principal.orgId,
+          requestId,
+          actorId: principal.actorId,
+          action,
+          resourceType,
+          resourceId,
+          context,
+        },
       });
     });
     this.bus.publish(event);
@@ -1108,7 +1383,7 @@ export class MessageLayer {
     principal: Principal,
     requestId: string,
     approve: boolean,
-    notes = "",
+    options: ApprovalOptions = {},
   ): Promise<{ status: PermissionRequestStatus; grantId: string | null }> {
     await this.assertOrgActor(principal);
     if (!principal.scopes.includes("grant:create") && !(await this.hasGrant(principal, "grant:create", "org", principal.orgId))) {
@@ -1128,9 +1403,19 @@ export class MessageLayer {
     if (!req) throw new NotFoundError(`permission request not found: ${requestId}`);
     if (req.status !== "open") throw new ValidationError("request not open");
 
+    const notes = options.notes ?? "";
     let grantId: string | null = null;
     if (approve) {
-      grantId = await this.createGrant(principal, req.actor_id, req.resource_type, req.resource_id, req.action);
+      grantId = await this.createGrant(
+        principal,
+        req.actor_id,
+        req.resource_type,
+        req.resource_id,
+        req.action,
+        options.expiresAt ?? null,
+        {},
+        options.maxUses ?? null,
+      );
     }
     const status: PermissionRequestStatus = approve ? "approved" : "denied";
     const event = await this.db.tx(async (tx) => {
@@ -1142,7 +1427,15 @@ export class MessageLayer {
       return this.emit(tx, {
         orgId: principal.orgId,
         eventType: "permission_request.resolved",
-        payload: { orgId: principal.orgId, requestId, status, grantId, resolverActorId: principal.actorId },
+        payload: {
+          orgId: principal.orgId,
+          requestId,
+          status,
+          grantId,
+          expiresAt: options.expiresAt ?? null,
+          maxUses: options.maxUses ?? null,
+          resolverActorId: principal.actorId,
+        },
       });
     });
     this.bus.publish(event);
@@ -1163,14 +1456,22 @@ export class MessageLayer {
   async listOpenPermissionRequests(
     orgId: string,
     actorId?: string,
-  ): Promise<Array<{ requestId: string; actorId: string; action: string; resourceType: string; resourceId: string | null; createdAt: string }>> {
+  ): Promise<Array<{
+    requestId: string;
+    actorId: string;
+    action: string;
+    resourceType: string;
+    resourceId: string | null;
+    context: PermissionRequestContext;
+    createdAt: string;
+  }>> {
     const rows = actorId
-      ? await this.query<{ id: string; actor_id: string; action: string; resource_type: string; resource_id: string | null; created_at: string }>(
-          "SELECT id,actor_id,action,resource_type,resource_id,created_at FROM permission_requests WHERE org_id=? AND actor_id=? AND status='open' ORDER BY created_at ASC",
+      ? await this.query<{ id: string; actor_id: string; action: string; resource_type: string; resource_id: string | null; request_context_json: unknown; created_at: string }>(
+          "SELECT id,actor_id,action,resource_type,resource_id,request_context_json,created_at FROM permission_requests WHERE org_id=? AND actor_id=? AND status='open' ORDER BY created_at ASC",
           [orgId, actorId],
         )
-      : await this.query<{ id: string; actor_id: string; action: string; resource_type: string; resource_id: string | null; created_at: string }>(
-          "SELECT id,actor_id,action,resource_type,resource_id,created_at FROM permission_requests WHERE org_id=? AND status='open' ORDER BY created_at ASC",
+      : await this.query<{ id: string; actor_id: string; action: string; resource_type: string; resource_id: string | null; request_context_json: unknown; created_at: string }>(
+          "SELECT id,actor_id,action,resource_type,resource_id,request_context_json,created_at FROM permission_requests WHERE org_id=? AND status='open' ORDER BY created_at ASC",
           [orgId],
         );
     return rows.map((r) => ({
@@ -1179,6 +1480,7 @@ export class MessageLayer {
       action: r.action,
       resourceType: r.resource_type,
       resourceId: r.resource_id,
+      context: parseJsonRecord(r.request_context_json) as PermissionRequestContext,
       createdAt: r.created_at,
     }));
   }
@@ -1221,6 +1523,9 @@ export class MessageLayer {
         resourceId: input.streamId,
       });
     }
+    // Actual grant consumption happens inside the metadata tx below, so a
+    // single-use artifact:register grant burns atomically with the
+    // artifact INSERT.
 
     const computedSha = createHash("sha256").update(input.content).digest("hex");
     if (input.sha256 && input.sha256.toLowerCase() !== computedSha) {
@@ -1238,7 +1543,19 @@ export class MessageLayer {
     await this.storage.put(storageKey, input.content, { contentType: input.contentType });
 
     try {
-      const event = await this.db.tx(async (tx) => {
+      const events = await this.db.tx(async (tx) => {
+        const first = await this.consumeGrantInTx(tx, principal, "artifact:register", streamType, input.streamId);
+        const consume = first.consumed
+          ? first
+          : await this.consumeGrantInTx(tx, principal, "message:append", streamType, input.streamId);
+        if (!consume.consumed) {
+          throw new PermissionError("missing artifact:register", {
+            capability: "artifact:register",
+            resourceType: streamType,
+            resourceId: input.streamId,
+          });
+        }
+        const extra = consume.events;
         await this.txQuery(
           tx,
           `INSERT INTO artifacts(
@@ -1260,7 +1577,7 @@ export class MessageLayer {
             createdAt,
           ],
         );
-        return this.emit(tx, {
+        const registered = await this.emit(tx, {
           orgId: principal.orgId,
           streamId: input.streamId,
           eventType: "artifact.registered",
@@ -1276,8 +1593,9 @@ export class MessageLayer {
             createdByActorId: principal.actorId,
           },
         });
+        return [...extra, registered];
       });
-      this.bus.publish(event);
+      for (const e of events) this.bus.publish(e);
     } catch (error) {
       // Best-effort cleanup of the just-written blob if the metadata insert
       // failed. Swallow adapter errors during cleanup — the original failure
@@ -1484,7 +1802,7 @@ export class MessageLayer {
 
   // ── audit ────────────────────────────────────────────────────────────────
 
-  async auditRows(orgId: string): Promise<AuditRow[]> {
+  async auditRows(orgId: string, options: { actorId?: string; limit?: number } = {}): Promise<AuditRow[]> {
     const rows = await this.query<{
       id: string;
       event_type: string;
@@ -1496,7 +1814,7 @@ export class MessageLayer {
       "SELECT id,event_type,payload_json,prev_hash,event_hash,created_at FROM audit_events WHERE org_id=? ORDER BY audit_seq ASC",
       [orgId],
     );
-    return rows.map((r) => {
+    const all: AuditRow[] = rows.map((r) => {
       this.ensureEventType(r.event_type);
       return {
         id: r.id,
@@ -1507,6 +1825,20 @@ export class MessageLayer {
         createdAt: r.created_at,
       };
     });
+    if (!options.actorId && !options.limit) return all;
+
+    // Filter client-side instead of in SQL so the hash chain stays stable
+    // — audit rows are small, and we want verification to keep working
+    // against the full chain even when callers are looking at a slice.
+    let out = all;
+    if (options.actorId) {
+      const target = options.actorId;
+      out = out.filter((row) => actorAppearsIn(row, target));
+    }
+    if (options.limit && out.length > options.limit) {
+      out = out.slice(-options.limit);
+    }
+    return out;
   }
 
   async verifyAuditChain(orgId: string): Promise<{ valid: boolean; firstBadIndex: number | null; total: number }> {

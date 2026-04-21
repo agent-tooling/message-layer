@@ -52,6 +52,35 @@ export type MessageRecord = {
 export const permissionRequestStatusSchema = z.enum(["open", "approved", "denied"]);
 export type PermissionRequestStatus = z.infer<typeof permissionRequestStatusSchema>;
 
+/**
+ * Opaque, capability-specific structured payload attached to a permission
+ * request. The agent that opened the request writes whatever args matter
+ * for a human to judge the intent (channel name, message text, artifact
+ * filename, etc.). The service treats this as a JSON blob and carries it
+ * through to the emitted `permission_request.created` event so UIs and
+ * policy plugins can render it.
+ */
+export type PermissionRequestContext = Record<string, unknown>;
+
+/**
+ * Resolution options when a human (or policy plugin) approves a request.
+ * Inspired by the Better Auth agent-auth spec's
+ * `AgentCapabilityGrant { expiresAt, constraints }` shape plus an explicit
+ * usage cap so "approve once" is representable without leaking a latent
+ * permanent grant.
+ */
+export type ApprovalOptions = {
+  /** ISO-8601 timestamp when the issued grant auto-expires. */
+  expiresAt?: string | null;
+  /**
+   * How many times the grant may be consumed before it auto-deactivates.
+   * Omitted / null means unlimited. `1` is the "approve once" case.
+   */
+  maxUses?: number | null;
+  /** Free-form resolver notes (reason, context for the audit log). */
+  notes?: string;
+};
+
 export const eventTypes = [
   "channel.created",
   "thread.created",
