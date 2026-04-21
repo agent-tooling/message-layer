@@ -133,4 +133,106 @@ describe("nextjs lib/message-layer helpers", () => {
 
     void requesterPrincipal; // exercised above via grantAgentCapability; silence unused warning
   });
+
+  test("admin UI helpers: approval modes + revoke-grants + audit filter", async () => {
+    const ml = await import("../lib/message-layer");
+
+    // Fresh org so the audit chain is uncontaminated.
+    const orgRes = await fetch(`${server.address}/v1/orgs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "NextjsAdminTestOrg" }),
+    });
+    const { orgId } = (await orgRes.json()) as { orgId: string };
+    const adminRes = await fetch(`${server.address}/v1/actors`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ orgId, actorType: "human", displayName: "admin" }),
+    });
+    const { actorId: adminActorId } = (await adminRes.json()) as { actorId: string };
+    const admin: MlPrincipal = {
+      actorId: adminActorId,
+      orgId,
+      scopes: ["channel:create", "thread:create", "message:append", "grant:create", "audit:read"],
+      provider: "nextjs-test",
+    };
+    const botRes = await fetch(`${server.address}/v1/actors`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ orgId, actorType: "agent", displayName: "bot" }),
+    });
+    const { actorId: botActorId } = (await botRes.json()) as { actorId: string };
+    const bot: MlPrincipal = { actorId: botActorId, orgId, scopes: [], provider: "nextjs-test-agent" };
+    const channelId = await ml.createChannel(admin, "room");
+
+    // Agent tries to post, autoRequestOnDeny opens a contextful request.
+    const autoDeny = await fetch(`${server.address}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-principal": JSON.stringify(bot),
+      },
+      body: JSON.stringify({
+        streamId: channelId,
+        streamType: "channel",
+        parts: [{ type: "text", payload: { text: "from the bot" } }],
+        idempotencyKey: "admin-smoke-1",
+        autoRequestOnDeny: true,
+      }),
+    });
+    const autoBody = (await autoDeny.json()) as { denied: boolean; requestId: string };
+    expect(autoBody.denied).toBe(true);
+
+    // Surface the context through the helper — this is what the UI renders.
+    const open = await ml.listPermissionRequests(admin);
+    const row = open.find((r) => r.requestId === autoBody.requestId);
+    expect(row).toBeDefined();
+    expect((row!.context as { kind?: string }).kind).toBe("message.append");
+
+    // Approve with maxUses: 1 — the one-shot path.
+    await ml.resolvePermissionRequest(admin, autoBody.requestId, true, { maxUses: 1 });
+
+    // First retry succeeds, second opens a fresh request.
+    const first = await fetch(`${server.address}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-principal": JSON.stringify(bot) },
+      body: JSON.stringify({
+        streamId: channelId,
+        streamType: "channel",
+        parts: [{ type: "text", payload: { text: "first post" } }],
+        idempotencyKey: "admin-smoke-2",
+      }),
+    });
+    expect(first.status).toBe(200);
+    const second = await fetch(`${server.address}/v1/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-principal": JSON.stringify(bot) },
+      body: JSON.stringify({
+        streamId: channelId,
+        streamType: "channel",
+        parts: [{ type: "text", payload: { text: "second post" } }],
+        idempotencyKey: "admin-smoke-3",
+      }),
+    });
+    expect(second.status).toBe(403);
+
+    // Issue a long-lived grant so there's something to revoke, then "kick".
+    await ml.grantAgentCapability({
+      orgId,
+      grantorActorId: adminActorId,
+      agentActorId: botActorId,
+      resourceType: "channel",
+      resourceId: channelId,
+      capability: "message:append",
+    });
+    const kicked = await ml.revokeAllGrantsForActor(admin, botActorId, "smoke-kick");
+    expect(kicked.revokedGrantIds.length).toBeGreaterThanOrEqual(1);
+
+    // Audit filter returns only rows involving the bot.
+    const botRows = await ml.fetchAuditRows(admin, { actorId: botActorId });
+    const types = botRows.map((r) => r.eventType);
+    expect(types).toContain("message.appended");
+    expect(types).toContain("grant.revoked");
+    expect(types).not.toContain("org.created");
+  });
 });

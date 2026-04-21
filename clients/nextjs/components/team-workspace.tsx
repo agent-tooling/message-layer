@@ -16,13 +16,21 @@ type Message = {
 type Member = { actorId: string; displayName: string; actorType: string };
 type Attachment = { id: string; name: string; mimeType: string; sizeBytes: number; url: string };
 type ActorRow = { actorId: string; displayName: string; actorType: string; createdAt: string };
-type Thread = { id: string; parentMessageId: string; createdAt?: string };
+type Thread = { id: string; parentMessageId: string; createdAt: string };
 type PermissionRequest = {
   requestId: string;
   actorId: string;
   action: string;
   resourceType: string;
   resourceId: string | null;
+  createdAt: string;
+};
+type WebhookSubscription = {
+  id: string;
+  endpoint: string;
+  eventTypes: string[];
+  streamId: string | null;
+  enabled: boolean;
   createdAt: string;
 };
 
@@ -42,6 +50,8 @@ export function TeamWorkspace() {
   const [approvals, setApprovals] = useState<PermissionRequest[]>([]);
   const [pendingUpload, setPendingUpload] = useState<Attachment[]>([]);
   const [currentActorId, setCurrentActorId] = useState<string | null>(null);
+  const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([]);
+  const [webhooksAvailable, setWebhooksAvailable] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const activeThreads = threadsByChannel[activeChannelId] ?? [];
@@ -124,6 +134,12 @@ export function TeamWorkspace() {
     setMessages(result.messages);
   }
 
+  async function refreshWebhooks() {
+    const result = await api<{ subscriptions: WebhookSubscription[]; available?: boolean }>("/api/team/webhooks");
+    setWebhooks(result.subscriptions);
+    setWebhooksAvailable(result.available !== false);
+  }
+
   async function refreshThreads(channelId: string) {
     const result = await api<{ threads: Thread[] }>(`/api/team/channels/${channelId}/threads`);
     setThreadsByChannel((prev) => ({ ...prev, [channelId]: result.threads }));
@@ -140,6 +156,9 @@ export function TeamWorkspace() {
       })
       .catch((err) => setError((err as Error).message));
     void refreshDirectory().catch((err) => setError((err as Error).message));
+    void refreshWebhooks().catch(() => {
+      // optional when plugin is not enabled
+    });
     void refreshApprovals().catch(() => {
       // approvals are optional; silent fail
     });
@@ -157,6 +176,7 @@ export function TeamWorkspace() {
       void refreshThreads(activeChannelId).catch(() => {});
       void refreshApprovals().catch(() => {});
       void refreshDirectory().catch(() => {});
+      void refreshWebhooks().catch(() => {});
     }, 2200);
     return () => clearInterval(timer);
   }, [activeChannelId]);
@@ -412,6 +432,28 @@ export function TeamWorkspace() {
             </p>
             <p>Agents run externally via Agent Auth.</p>
           </div>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">Webhooks</p>
+          {!webhooksAvailable ? (
+            <p className="mt-2">Webhook plugin is not enabled.</p>
+          ) : webhooks.length === 0 ? (
+            <p className="mt-2">No webhook subscriptions yet.</p>
+          ) : (
+            <ul className="mt-2 space-y-2">
+              {webhooks.map((hook) => (
+                <li key={hook.id} className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-2">
+                  <p className="truncate text-zinc-300">{hook.endpoint}</p>
+                  <p className="mt-1 text-[11px] text-zinc-500">
+                    {hook.eventTypes.join(", ")}
+                    {hook.streamId ? ` · stream ${hook.streamId.slice(0, 8)}` : " · org-wide"}
+                  </p>
+                  {!hook.enabled ? <p className="mt-1 text-[11px] text-amber-300">disabled</p> : null}
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="mt-auto pt-4 text-xs text-zinc-500">

@@ -20,6 +20,8 @@ const adminScopes = [
   "thread:create",
   "message:append",
   "grant:create",
+  "webhook:subscribe",
+  "webhook:read",
 ];
 
 // Next.js 16 / Turbopack can give each route handler chunk its own copy of
@@ -388,6 +390,22 @@ export type PermissionRequestRow = {
   action: string;
   resourceType: string;
   resourceId: string | null;
+  context: Record<string, unknown>;
+  createdAt: string;
+};
+
+export type ResolveOptions = {
+  notes?: string;
+  expiresAt?: string | null;
+  maxUses?: number | null;
+};
+
+export type MlAuditRow = {
+  id: string;
+  eventType: string;
+  payload: Record<string, unknown>;
+  prevHash: string | null;
+  eventHash: string;
   createdAt: string;
 };
 
@@ -407,13 +425,44 @@ export async function resolvePermissionRequest(
   principal: MlPrincipal,
   requestId: string,
   approve: boolean,
-  notes: string,
+  options: ResolveOptions = {},
 ): Promise<void> {
   await mlRequest(`/v1/permission-requests/${requestId}/resolve`, {
     method: "POST",
     principal,
-    body: { approve, notes },
+    body: {
+      approve,
+      notes: options.notes ?? (approve ? "approved via UI" : "denied via UI"),
+      expiresAt: options.expiresAt ?? null,
+      maxUses: options.maxUses ?? null,
+    },
   });
+}
+
+export async function revokeAllGrantsForActor(
+  principal: MlPrincipal,
+  actorId: string,
+  reason?: string,
+): Promise<{ revokedGrantIds: string[] }> {
+  return mlRequest<{ revokedGrantIds: string[] }>(`/v1/actors/${actorId}/revoke-grants`, {
+    method: "POST",
+    principal,
+    body: { reason: reason ?? "" },
+  });
+}
+
+export async function fetchAuditRows(
+  principal: MlPrincipal,
+  options: { actorId?: string; limit?: number } = {},
+): Promise<MlAuditRow[]> {
+  const params = new URLSearchParams();
+  if (options.actorId) params.set("actorId", options.actorId);
+  if (options.limit) params.set("limit", String(options.limit));
+  const qs = params.toString();
+  const result = await mlRequest<{ rows: MlAuditRow[] }>(`/v1/audit/rows${qs ? `?${qs}` : ""}`, {
+    principal,
+  });
+  return result.rows;
 }
 
 // ── artifacts ──────────────────────────────────────────────────────────
@@ -509,4 +558,25 @@ export async function promoteKnowledge(
     { method: "POST", principal, body: { summary } },
   );
   return result.entry;
+}
+
+export type MlWebhookSubscription = {
+  id: string;
+  orgId: string;
+  actorId: string;
+  endpoint: string;
+  eventTypes: string[];
+  streamId: string | null;
+  enabled: boolean;
+  createdAt: string;
+};
+
+export async function listWebhookSubscriptions(
+  principal: MlPrincipal,
+): Promise<MlWebhookSubscription[]> {
+  const result = await mlRequest<{ subscriptions: MlWebhookSubscription[] }>(
+    "/v1/webhooks/subscriptions?includeDisabled=true",
+    { principal },
+  );
+  return result.subscriptions;
 }
