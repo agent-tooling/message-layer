@@ -32,9 +32,13 @@ type RoleGrantTemplate = {
   resourceId: string | null;
 };
 
-const defaultHumanScopes: string[] = [];
 const bootstrapScopes = ["channel:create", "grant:create"];
 const orgPlaceholder = "$org";
+const roleScopes: Record<UserRole, string[]> = {
+  owner: ["audit:read"],
+  admin: ["audit:read"],
+  member: [],
+};
 
 const roleTemplates: Record<UserRole, RoleGrantTemplate[]> = {
   owner: [
@@ -215,6 +219,10 @@ function resolveRoleResourceId(resourceId: string | null, orgId: string): string
   return resourceId;
 }
 
+function scopesForRole(role: UserRole): string[] {
+  return roleScopes[role];
+}
+
 async function applyRoleGrants(input: {
   grantor: MlPrincipal;
   actorId: string;
@@ -276,7 +284,7 @@ export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrinci
       const principal: MlPrincipal = {
         actorId: existing.actor_id,
         orgId: existing.org_id,
-        scopes: defaultHumanScopes,
+        scopes: scopesForRole(desiredRole),
         provider: "better-auth",
       };
       try {
@@ -320,15 +328,15 @@ export async function ensureUserPrincipal(user: MlSessionUser): Promise<MlPrinci
       created_at: new Date().toISOString(),
     });
 
-    const principal: MlPrincipal = {
-      actorId,
-      orgId,
-      scopes: defaultHumanScopes,
-      provider: "better-auth",
-    };
     const desiredRole = resolveRole(
       getUserRole(user.id) ?? (getSetting("first_user_id") === user.id ? "owner" : "member"),
     );
+    const principal: MlPrincipal = {
+      actorId,
+      orgId,
+      scopes: scopesForRole(desiredRole),
+      provider: "better-auth",
+    };
     await reconcileUserRole({
       userId: user.id,
       actorId,
@@ -433,7 +441,10 @@ export async function setUserRoleForPrincipal(user: MlSessionUser, role: UserRol
     orgId: principal.orgId,
     role,
   });
-  return principal;
+  return {
+    ...principal,
+    scopes: scopesForRole(role),
+  };
 }
 
 export async function listChannels(principal: MlPrincipal): Promise<Array<{ id: string; name: string; visibility: string }>> {

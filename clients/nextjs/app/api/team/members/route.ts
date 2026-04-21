@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   try {
     const { principal } = await requirePrincipal(request.headers);
     const members = await listMembers(principal);
-    const capabilities = ["message:append", "thread:create", "channel:create", "grant:create"];
+    const capabilities = ["message:append", "thread:create", "channel:create", "grant:create", "audit:read"];
     const withRoles = await Promise.all(
       members.map(async (member) => {
         const userId = getUserIdByActorId(member.actorId);

@@ -19,7 +19,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ rows });
   } catch (error) {
     const message = (error as Error).message;
-    const status = /401|unauthorized/i.test(message) ? 401 : 400;
+    const status = /401|unauthorized/i.test(message)
+      ? 401
+      : /403|permission_denied|missing audit:read scope/i.test(message)
+        ? 403
+        : 400;
     return NextResponse.json({ error: message }, { status });
   }
 }

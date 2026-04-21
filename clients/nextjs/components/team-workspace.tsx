@@ -3,6 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { authClient } from "@/lib/auth-client";
+import {
+  ApprovalInbox,
+  type PermissionRequest as ApprovalPermissionRequest,
+  type ResolveApprovalOptions,
+} from "@/components/approval-inbox";
 import { MessageCard } from "@/components/message-card";
 import { ThreadPanel } from "@/components/thread-panel";
 
@@ -25,15 +30,7 @@ type Member = {
 type Attachment = { id: string; name: string; mimeType: string; sizeBytes: number; url: string };
 type ActorRow = { actorId: string; displayName: string; actorType: string; createdAt: string };
 type Thread = { id: string; parentMessageId: string; createdAt: string };
-type PermissionRequest = {
-  requestId: string;
-  actorId: string;
-  action: string;
-  resourceType: string;
-  resourceId: string | null;
-  context?: Record<string, unknown>;
-  createdAt: string;
-};
+type PermissionRequest = ApprovalPermissionRequest;
 type WebhookSubscription = {
   id: string;
   endpoint: string;
@@ -114,62 +111,6 @@ export function TeamWorkspace() {
     () => members.filter((member) => member.actorType === "human"),
     [members],
   );
-
-  function requestContextDetails(request: PermissionRequest): string[] {
-    const context = request.context ?? {};
-    const details: string[] = [];
-    const tool = context.tool;
-    if (typeof tool === "string" && tool.length > 0) {
-      details.push(`tool: ${tool}`);
-    }
-    const channelName = context.requestedName;
-    const channelVisibility = context.requestedVisibility;
-    if (typeof channelName === "string" && channelName.length > 0) {
-      details.push(`channel: #${channelName}`);
-    }
-    if (typeof channelVisibility === "string" && channelVisibility.length > 0) {
-      details.push(`visibility: ${channelVisibility}`);
-    }
-    const legacyName = context.name;
-    const legacyVisibility = context.visibility;
-    if (details.length === 0 && typeof legacyName === "string" && legacyName.length > 0) {
-      details.push(`channel: #${legacyName}`);
-      if (typeof legacyVisibility === "string" && legacyVisibility.length > 0) {
-        details.push(`visibility: ${legacyVisibility}`);
-      }
-    }
-    const streamType = context.streamType;
-    const streamId = context.streamId;
-    if (typeof streamType === "string" && typeof streamId === "string") {
-      details.push(`${streamType}: ${streamId}`);
-    }
-    const parts = context.parts;
-    if (Array.isArray(parts) && parts.length > 0) {
-      const textPreview = parts
-        .map((part) => {
-          if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
-            return String((part as { text: string }).text);
-          }
-          return null;
-        })
-        .filter((value): value is string => value !== null)
-        .join(" ");
-      if (textPreview.length > 0) {
-        const trimmed = textPreview.length > 160 ? `${textPreview.slice(0, 160)}…` : textPreview;
-        details.push(`message preview: "${trimmed}"`);
-      }
-    }
-    return details;
-  }
-
-  function requestContextJson(context: Record<string, unknown> | undefined): string | null {
-    if (!context || Object.keys(context).length === 0) return null;
-    try {
-      return JSON.stringify(context, null, 2);
-    } catch {
-      return null;
-    }
-  }
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(path, { ...init, cache: "no-store" });
@@ -373,18 +314,31 @@ export function TeamWorkspace() {
     }
   }
 
-  async function resolveApproval(requestId: string, approve: boolean) {
+  async function resolveApproval(requestId: string, approve: boolean, options: ResolveApprovalOptions) {
     try {
       await api(`/api/team/permission-requests/${requestId}/resolve`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ approve, notes: approve ? "approved via UI" : "denied via UI" }),
+        body: JSON.stringify({
+          approve,
+          notes: options.notes ?? (approve ? "approved via inbox" : "denied via inbox"),
+          expiresAt: options.expiresAt ?? null,
+          maxUses: options.maxUses ?? null,
+        }),
       });
       setApprovals((prev) => prev.filter((request) => request.requestId !== requestId));
     } catch (err) {
       setError((err as Error).message);
     }
   }
+
+  const channelsById = useMemo(() => {
+    const map: Record<string, { name: string }> = {};
+    for (const channel of channels) {
+      map[channel.id] = { name: channel.name };
+    }
+    return map;
+  }, [channels]);
 
   async function createThreadFromMessage(parentMessageId: string) {
     if (!activeChannelId) return;
@@ -638,64 +592,13 @@ export function TeamWorkspace() {
           </div>
         </header>
 
-        {canResolveApprovals && approvals.length > 0 ? (
-          <div className="border-b border-amber-500/10 bg-amber-500/[0.03] px-6 py-3">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-amber-300">
-              Pending approval requests
-            </p>
-            <ul className="space-y-2">
-              {approvals.map((request) => {
-                const actor = actorsById[request.actorId];
-                const capability = request.action.replace(/^tool:execute:/, "");
-                const detailLines = requestContextDetails(request);
-                const contextJson = requestContextJson(request.context);
-                return (
-                  <li
-                    key={request.requestId}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/20 bg-zinc-950/60 px-3 py-2"
-                  >
-                    <div className="min-w-0 text-xs">
-                      <div className="font-semibold text-zinc-100">
-                        {actor?.displayName ?? request.actorId.slice(0, 10)}{" "}
-                        <span className="text-zinc-500">requests</span>{" "}
-                        <span className="text-amber-200">{capability || request.action}</span>
-                      </div>
-                      <div className="mt-0.5 truncate text-[11px] text-zinc-500">
-                        {request.resourceType}
-                        {request.resourceId ? ` · ${request.resourceId}` : ""}
-                      </div>
-                      {detailLines.map((detail) => (
-                        <div key={`${request.requestId}-${detail}`} className="mt-0.5 truncate text-[11px] text-zinc-400">
-                          {detail}
-                        </div>
-                      ))}
-                      {contextJson ? (
-                        <pre className="mt-1 max-h-28 overflow-auto rounded border border-zinc-800 bg-zinc-900/70 p-2 text-[10px] text-zinc-400">
-                          {contextJson}
-                        </pre>
-                      ) : null}
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => resolveApproval(request.requestId, true)}
-                        className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500"
-                        type="button"
-                      >
-                        Allow
-                      </button>
-                      <button
-                        onClick={() => resolveApproval(request.requestId, false)}
-                        className="rounded-md border border-red-700 bg-red-700/40 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-700/60"
-                        type="button"
-                      >
-                        Deny
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+        {canResolveApprovals ? (
+          <ApprovalInbox
+            approvals={approvals}
+            actorsById={actorsById}
+            channelsById={channelsById}
+            onResolve={resolveApproval}
+          />
         ) : null}
 
         <div className="flex-1 overflow-y-auto px-6 py-6">
