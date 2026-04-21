@@ -1,13 +1,28 @@
 {
   "name": "message-layer",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
-  "description": "Headless messaging layer v1 core",
+  "description": "Headless messaging and coordination layer for humans, agents, and apps",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./agent-kernel": {
+      "import": "./dist/agent-kernel/index.js",
+      "types": "./dist/agent-kernel/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "dev": "tsx src/server.ts",
     "start": "node --enable-source-maps dist/server.js",
     "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "client:terminal": "tsx clients/terminal/client.ts",
