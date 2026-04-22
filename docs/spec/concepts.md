@@ -76,6 +76,8 @@ A message is composed of one or more ordered parts. Each part has:
 - `index` — position within the message
 - `type` — one of:
   - `text`
+  - `mention`
+  - `command`
   - `tool_call`
   - `tool_result`
   - `artifact`

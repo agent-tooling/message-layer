@@ -8,6 +8,8 @@ export type Visibility = z.infer<typeof visibilitySchema>;
 
 export const messagePartTypes = [
   "text",
+  "mention",
+  "command",
   "tool_call",
   "tool_result",
   "artifact",
@@ -119,6 +121,8 @@ export const eventTypes = [
   "channel.created",
   "thread.created",
   "message.appended",
+  "mention.recorded",
+  "command.invoked",
   "message.redacted",
   "membership.updated",
   "cursor.updated",

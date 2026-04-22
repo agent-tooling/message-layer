@@ -434,6 +434,12 @@ Every authenticated request carries an `x-principal` JSON header. See [`docs/spe
 | `GET` | `/v1/knowledge?streamId=…` | List knowledge entries (`scoped-knowledge` plugin) |
 | `POST` | `/v1/knowledge/:id/promote` | Promote knowledge org-wide (`scoped-knowledge` plugin) |
 
+`MessagePart.type` includes `text`, `mention`, `command`, `tool_call`,
+`tool_result`, `artifact`, `approval_request`, `approval_response`, and `ui`.
+`command` parts require `command:invoke` on the target stream in addition to
+`message:append`; when `autoRequestOnDeny` is enabled, denied command calls
+auto-open a `command:invoke` permission request with structured context.
+
 ---
 
 ## WebSocket

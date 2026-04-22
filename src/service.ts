@@ -37,6 +37,8 @@ const EVENT_TYPES = [
   "channel.created",
   "thread.created",
   "message.appended",
+  "mention.recorded",
+  "command.invoked",
   "message.redacted",
   "membership.updated",
   "cursor.updated",
@@ -55,6 +57,21 @@ const EVENT_TYPE_SET: ReadonlySet<EventType> = new Set(EVENT_TYPES);
 
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 500;
+
+type MentionPartInput = {
+  actorId: string;
+  label?: string;
+  start?: number;
+  end?: number;
+  partIndex: number;
+};
+
+type CommandPartInput = {
+  command: string;
+  args: Record<string, unknown>;
+  invocationId: string | null;
+  partIndex: number;
+};
 
 /**
  * Build a bounded, non-sensitive preview of an append-message attempt so a
@@ -82,6 +99,24 @@ function buildAppendRequestContext(
     idempotencyKey: input.idempotencyKey,
     partCount: parts.length,
     parts: preview,
+  };
+}
+
+function buildCommandInvokeRequestContext(
+  input: AppendMessageInput,
+  commands: CommandPartInput[],
+): PermissionRequestContext {
+  return {
+    kind: "command.invoke",
+    streamType: input.streamType,
+    streamId: input.streamId,
+    idempotencyKey: input.idempotencyKey,
+    commands: commands.map((command) => ({
+      command: command.command,
+      invocationId: command.invocationId,
+      partIndex: command.partIndex,
+      argKeys: Object.keys(command.args).slice(0, 12),
+    })),
   };
 }
 
@@ -315,6 +350,112 @@ export class MessageLayer {
     if (!row) {
       throw new PermissionError("actor is not in org");
     }
+  }
+
+  private collectCommandParts(parts: MessagePart[]): CommandPartInput[] {
+    const out: CommandPartInput[] = [];
+    for (const [partIndex, part] of parts.entries()) {
+      if (part.type !== "command") continue;
+      const command = typeof part.payload.command === "string" ? part.payload.command.trim() : "";
+      if (!command) {
+        throw new ValidationError("command part requires a non-empty payload.command");
+      }
+      const argsValue = part.payload.args;
+      const args =
+        argsValue === undefined
+          ? {}
+          : argsValue && typeof argsValue === "object" && !Array.isArray(argsValue)
+            ? (argsValue as Record<string, unknown>)
+            : null;
+      if (args === null) {
+        throw new ValidationError("command part payload.args must be a JSON object when present");
+      }
+      const invocationIdRaw = part.payload.invocationId;
+      const invocationId =
+        typeof invocationIdRaw === "string" && invocationIdRaw.trim().length > 0
+          ? invocationIdRaw.trim()
+          : null;
+      out.push({ command, args, invocationId, partIndex });
+    }
+    return out;
+  }
+
+  private async collectMentionParts(
+    principal: Principal,
+    resolved: { channelId: string; visibility: Visibility },
+    parts: MessagePart[],
+  ): Promise<MentionPartInput[]> {
+    const out: MentionPartInput[] = [];
+    for (const [partIndex, part] of parts.entries()) {
+      if (part.type !== "mention") continue;
+      const actorId = typeof part.payload.actorId === "string" ? part.payload.actorId.trim() : "";
+      if (!actorId) {
+        throw new ValidationError("mention part requires a non-empty payload.actorId");
+      }
+      const actor = await this.queryOne<{ id: string; org_id: string }>(
+        "SELECT id,org_id FROM actors WHERE id=?",
+        [actorId],
+      );
+      if (!actor || actor.org_id !== principal.orgId) {
+        throw new ValidationError(`mentioned actor is not in principal org: ${actorId}`);
+      }
+      if (resolved.visibility === "private") {
+        const visibleToMentioned = await this.isChannelMember(
+          principal.orgId,
+          actorId,
+          resolved.channelId,
+        );
+        if (!visibleToMentioned) {
+          throw new ValidationError(
+            `cannot mention actor without private stream access: ${actorId}`,
+          );
+        }
+      }
+      const start =
+        typeof part.payload.start === "number" && Number.isInteger(part.payload.start)
+          ? Number(part.payload.start)
+          : undefined;
+      const end =
+        typeof part.payload.end === "number" && Number.isInteger(part.payload.end)
+          ? Number(part.payload.end)
+          : undefined;
+      if (start !== undefined && start < 0) {
+        throw new ValidationError("mention part payload.start must be >= 0");
+      }
+      if (end !== undefined && end < 0) {
+        throw new ValidationError("mention part payload.end must be >= 0");
+      }
+      if (start !== undefined && end !== undefined && end < start) {
+        throw new ValidationError("mention part payload.end must be >= payload.start");
+      }
+      const label =
+        typeof part.payload.label === "string" && part.payload.label.length > 0
+          ? part.payload.label
+          : undefined;
+      out.push({ actorId, label, start, end, partIndex });
+    }
+    return out;
+  }
+
+  private async validateAppendParts(
+    principal: Principal,
+    input: AppendMessageInput,
+    parts: MessagePart[],
+  ): Promise<{
+    mentions: MentionPartInput[];
+    commands: CommandPartInput[];
+  }> {
+    const streamType = streamTypeSchema.parse(input.streamType);
+    const resolved = await this.resolveStreamChannel(input.streamId, streamType);
+    if (!resolved) {
+      throw new NotFoundError(`${streamType} not found: ${input.streamId}`);
+    }
+    if (resolved.orgId !== principal.orgId) {
+      throw new PermissionError("stream not in principal org");
+    }
+    const mentions = await this.collectMentionParts(principal, resolved, parts);
+    const commands = this.collectCommandParts(parts);
+    return { mentions, commands };
   }
 
   /**
@@ -883,6 +1024,7 @@ export class MessageLayer {
 
     // Privacy: must be in org + stream must be readable (membership for private).
     await this.assertStreamReadable(principal, input.streamId, streamType);
+    const { mentions, commands } = await this.validateAppendParts(principal, input, parts);
 
     // Fast read-only check to decide between "deny" and "open permission
     // request". The actual grant consumption happens inside the transaction
@@ -906,6 +1048,29 @@ export class MessageLayer {
       }
       throw new PermissionError("missing message:append", {
         capability: "message:append",
+        resourceType: streamType,
+        resourceId: input.streamId,
+      });
+    }
+    if (commands.length > 0 && !(await this.hasGrant(principal, "command:invoke", streamType, input.streamId))) {
+      if (input.autoRequestOnDeny) {
+        const requestId = await this.createPermissionRequest(
+          principal,
+          "command:invoke",
+          streamType,
+          input.streamId,
+          buildCommandInvokeRequestContext(input, commands),
+        );
+        return {
+          denied: true,
+          requestId,
+          capability: "command:invoke",
+          resourceType: streamType,
+          resourceId: input.streamId,
+        };
+      }
+      throw new PermissionError("missing command:invoke", {
+        capability: "command:invoke",
         resourceType: streamType,
         resourceId: input.streamId,
       });
@@ -934,7 +1099,24 @@ export class MessageLayer {
           resourceId: input.streamId,
         });
       }
-      const extraEvents = consume.events;
+      const extraEvents = [...consume.events];
+      if (commands.length > 0) {
+        const commandConsume = await this.consumeGrantInTx(
+          tx,
+          principal,
+          "command:invoke",
+          streamType,
+          input.streamId,
+        );
+        if (!commandConsume.consumed) {
+          throw new PermissionError("missing command:invoke", {
+            capability: "command:invoke",
+            resourceType: streamType,
+            resourceId: input.streamId,
+          });
+        }
+        extraEvents.push(...commandConsume.events);
+      }
 
       const messageId = this.id();
       const streamSeq = await this.nextSeqTx(tx, input.streamId);
@@ -967,9 +1149,56 @@ export class MessageLayer {
           createdAt,
         },
       });
+      const mentionEvents: DomainEvent[] = [];
+      for (const mention of mentions) {
+        mentionEvents.push(
+          await this.emit(tx, {
+            orgId: principal.orgId,
+            streamId: input.streamId,
+            streamSeq,
+            eventType: "mention.recorded",
+            payload: {
+              orgId: principal.orgId,
+              streamId: input.streamId,
+              streamType,
+              messageId,
+              streamSeq,
+              mentionedActorId: mention.actorId,
+              partIndex: mention.partIndex,
+              label: mention.label ?? null,
+              start: mention.start ?? null,
+              end: mention.end ?? null,
+              actorId: principal.actorId,
+            },
+          }),
+        );
+      }
+      const commandEvents: DomainEvent[] = [];
+      for (const command of commands) {
+        commandEvents.push(
+          await this.emit(tx, {
+            orgId: principal.orgId,
+            streamId: input.streamId,
+            streamSeq,
+            eventType: "command.invoked",
+            payload: {
+              orgId: principal.orgId,
+              streamId: input.streamId,
+              streamType,
+              messageId,
+              streamSeq,
+              command: command.command,
+              invocationId: command.invocationId,
+              partIndex: command.partIndex,
+              argKeys: Object.keys(command.args),
+              actorId: principal.actorId,
+            },
+          }),
+        );
+      }
       return {
         result: { messageId, streamSeq, idempotent: false } as AppendMessageSuccess,
-        events: [event, ...extraEvents],
+        events: [event, ...mentionEvents, ...commandEvents, ...extraEvents],
       };
     });
 

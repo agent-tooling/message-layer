@@ -178,7 +178,7 @@ Idempotent on `(orgId, streamId, actorId, idempotencyKey)`.
 
 `MessagePart`:
 ```json
-{ "type": "text" | "tool_call" | "tool_result" | "artifact" | "approval_request" | "approval_response",
+{ "type": "text" | "mention" | "command" | "tool_call" | "tool_result" | "artifact" | "approval_request" | "approval_response" | "ui",
   "payload": { ... } }
 ```
 

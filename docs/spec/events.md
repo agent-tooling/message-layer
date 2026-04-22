@@ -30,6 +30,8 @@ driving external runtimes.
 | `channel.created`              | stream     | A channel (stream) was created.                        |
 | `thread.created`               | stream     | A thread (stream) was created.                         |
 | `message.appended`             | stream     | A new message landed on a stream.                      |
+| `mention.recorded`             | stream     | A mention part targeted an actor in the same org.      |
+| `command.invoked`              | stream     | A command part invocation was appended to a stream.    |
 | `message.redacted`             | stream     | A message was redacted; content is no longer readable. |
 | `membership.updated`           | org        | An actor's membership changed.                         |
 | `cursor.updated`               | stream     | An actor's read cursor moved.                          |

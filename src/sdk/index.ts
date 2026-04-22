@@ -124,7 +124,16 @@ export type WebhookSubscription = {
 // ── Input types ───────────────────────────────────────────────────────────
 
 export type MessagePart = {
-  type: "text" | "tool_call" | "tool_result" | "artifact" | "approval_request" | "approval_response";
+  type:
+    | "text"
+    | "mention"
+    | "command"
+    | "tool_call"
+    | "tool_result"
+    | "artifact"
+    | "approval_request"
+    | "approval_response"
+    | "ui";
   payload: Record<string, unknown>;
 };
 

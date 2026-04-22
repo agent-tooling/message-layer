@@ -59,6 +59,7 @@ the API include:
 | `channel:create`  | `org`         | Create a channel in the org.                   |
 | `thread:create`   | `channel`     | Create a thread in the channel.                |
 | `message:append`  | `channel` \| `thread` | Append a message to the stream.        |
+| `command:invoke`  | `channel` \| `thread` | Append and invoke a structured `command` part. |
 
 Consumers (e.g. the agent kernel) may define and check their own capability
 names, such as `tool:execute:<toolName>`.
@@ -93,7 +94,7 @@ of failing hard. A human or privileged actor then resolves the request.
 | `resourceType`  | string         | Target resource kind.                     |
 | `resourceId`    | string \| null | Target resource, or `null`.               |
 | `status`        | `open` \| `approved` \| `denied` | Lifecycle state.       |
-| `context`       | object         | Capability-specific structured payload describing *what* the actor tried to do. `message:append` auto-populates it with the stream id, a preview of each `text` part (truncated to 500 chars), and the type + top-level keys of non-text parts. Callers opening a request explicitly (e.g. agents) should populate it with enough args for a human to decide. See [§ Purpose-aware permissions](#purpose-aware-permissions). |
+| `context`       | object         | Capability-specific structured payload describing *what* the actor tried to do. `message:append` auto-populates it with the stream id, a preview of each `text` part (truncated to 500 chars), and the type + top-level keys of non-text parts. `command:invoke` auto-populates a command summary (`kind: "command.invoke"`) when command parts are denied with `autoRequestOnDeny`. Callers opening a request explicitly (e.g. agents) should populate it with enough args for a human to decide. See [§ Purpose-aware permissions](#purpose-aware-permissions). |
 | `createdAt`     | string         | ISO-8601.                                 |
 | `resolvedAt`    | string \| null | Set on approve/deny.                      |
 | `grantId`       | string \| null | Grant issued on approval, if any.         |

@@ -138,6 +138,108 @@ describe("service.appendMessage", () => {
     expect(appended).toBeDefined();
     expect(appended?.seq).toBe(1);
   });
+
+  test("records mention and command events for first-class parts", async () => {
+    const { orgId, admin, channelId } = await bootstrapChannel("private");
+    const mentioned = await principalFor(harness.service, orgId, "mentioned");
+    await harness.service.addChannelMember(admin, channelId, mentioned.actorId);
+    await harness.service.createGrant(
+      admin,
+      admin.actorId,
+      "channel",
+      channelId,
+      "command:invoke",
+    );
+
+    const received: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    harness.bus.subscribe((event) => received.push({ type: event.type, payload: event.payload }));
+
+    const result = await harness.service.appendMessage(admin, {
+      streamId: channelId,
+      streamType: "channel",
+      parts: [
+        { type: "text", payload: { text: "Run deploy for @mentioned" } },
+        {
+          type: "mention",
+          payload: { actorId: mentioned.actorId, label: "@mentioned", start: 15, end: 25 },
+        },
+        {
+          type: "command",
+          payload: { command: "deploy", args: { env: "prod" }, invocationId: "inv-1" },
+        },
+      ],
+      idempotencyKey: "mention-command-1",
+    });
+    if ("denied" in result && result.denied) throw new Error("unexpected deny");
+
+    const mentionEvent = received.find((event) => event.type === "mention.recorded");
+    expect(mentionEvent).toBeDefined();
+    expect(mentionEvent?.payload.mentionedActorId).toBe(mentioned.actorId);
+
+    const commandEvent = received.find((event) => event.type === "command.invoked");
+    expect(commandEvent).toBeDefined();
+    expect(commandEvent?.payload.command).toBe("deploy");
+    expect(commandEvent?.payload.invocationId).toBe("inv-1");
+  });
+
+  test("rejects mention of actor outside org", async () => {
+    const { admin, channelId } = await bootstrapChannel("public");
+    const otherOrgId = await harness.service.createOrg("other");
+    const outsider = await principalFor(harness.service, otherOrgId, "outsider");
+    await expect(
+      harness.service.appendMessage(admin, {
+        streamId: channelId,
+        streamType: "channel",
+        parts: [{ type: "mention", payload: { actorId: outsider.actorId } }],
+        idempotencyKey: "mention-outside-org",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  test("rejects mention of non-member in private channel", async () => {
+    const { orgId, admin, channelId } = await bootstrapChannel("private");
+    const nonMember = await principalFor(harness.service, orgId, "non-member");
+    await expect(
+      harness.service.appendMessage(admin, {
+        streamId: channelId,
+        streamType: "channel",
+        parts: [{ type: "mention", payload: { actorId: nonMember.actorId } }],
+        idempotencyKey: "mention-private-non-member",
+      }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  test("requires command:invoke for command parts", async () => {
+    const { orgId, channelId, admin } = await bootstrapChannel("public");
+    const bob = await principalFor(harness.service, orgId, "bob");
+    await harness.service.createGrant(admin, bob.actorId, "channel", channelId, "message:append");
+    await expect(
+      harness.service.appendMessage(bob, {
+        streamId: channelId,
+        streamType: "channel",
+        parts: [{ type: "command", payload: { command: "help", args: { topic: "build" } } }],
+        idempotencyKey: "command-without-capability",
+      }),
+    ).rejects.toBeInstanceOf(PermissionError);
+  });
+
+  test("command part denial can auto-open permission request", async () => {
+    const { orgId, channelId, admin } = await bootstrapChannel("public");
+    const bob = await principalFor(harness.service, orgId, "bob");
+    await harness.service.createGrant(admin, bob.actorId, "channel", channelId, "message:append");
+    const denied = await harness.service.appendMessage(bob, {
+      streamId: channelId,
+      streamType: "channel",
+      parts: [{ type: "command", payload: { command: "status", args: { verbose: true } } }],
+      idempotencyKey: "command-auto-request",
+      autoRequestOnDeny: true,
+    });
+    if (!("denied" in denied) || !denied.denied) throw new Error("expected denied result");
+    expect(denied.capability).toBe("command:invoke");
+    const request = await harness.service.getPermissionRequest(orgId, denied.requestId);
+    expect(request?.action).toBe("command:invoke");
+    expect(request?.context.kind).toBe("command.invoke");
+  });
 });
 
 describe("service.redactMessage", () => {

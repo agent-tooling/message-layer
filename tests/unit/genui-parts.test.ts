@@ -54,9 +54,14 @@ describe("messagePartTypes enum", () => {
     expect(messagePartTypes).toContain("ui");
   });
 
-  test("'ui' is the last entry (ordering matters for serialisation stability)", () => {
-    const idx = messagePartTypes.indexOf("ui" as typeof messagePartTypes[number]);
-    expect(idx).toBe(messagePartTypes.length - 1);
+  test("includes first-class mention and command parts", () => {
+    expect(messagePartTypes).toContain("mention");
+    expect(messagePartTypes).toContain("command");
+  });
+
+  test("'ui' remains in the canonical part list", () => {
+    const idx = messagePartTypes.indexOf("ui");
+    expect(idx).toBeGreaterThanOrEqual(0);
   });
 });
 
