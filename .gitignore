@@ -1,12 +1,25 @@
+# Secrets — never commit environment files or credential-bearing configs.
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+# Build / runtime artifacts.
 node_modules
 dist
-.pglite
 coverage
 *.log
+
+# Local database / cache files.
+.pglite
 agents/**/.data/
-agents/**/.env
 clients/**/.data
 clients/**/.data.*
-# reference repos (sparse clones, not tracked)
+
+# Reference repos (sparse clones, not tracked).
 references/electric/
 references/json-render/
