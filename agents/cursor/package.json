@@ -1,0 +1,26 @@
+{
+  "name": "cursor-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cursor-style agent daemon that executes thread invocations in message-layer.",
+  "scripts": {
+    "start": "tsx --env-file-if-exists=.env src/cursor.ts",
+    "once": "tsx --env-file-if-exists=.env src/cursor.ts --once",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mastra/core": "1.24.1",
+    "message-layer": "file:../../",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.16.5",
+    "@types/ws": "8.18.1",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

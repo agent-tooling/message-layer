@@ -27,6 +27,7 @@ type Props = {
   activeThreadId: string | null;
   onCreateThread: (parentMessageId: string) => void;
   onOpenThread: (threadId: string) => void;
+  onAskCursor?: (parentMessageId: string) => void;
 };
 
 function senderLabel(message: Message, actorsById: Record<string, Actor>, currentActorId: string | null) {
@@ -62,6 +63,7 @@ export function MessageCard({
   activeThreadId,
   onCreateThread,
   onOpenThread,
+  onAskCursor,
 }: Props) {
   const sender = senderLabel(message, actorsById, currentActorId);
   const contentParts = message.parts.filter((part) => part.type !== "tool_call" && part.type !== "tool_result");
@@ -118,6 +120,16 @@ export function MessageCard({
         >
           {threads.length > 0 ? "New thread" : "Create thread"}
         </button>
+        {onAskCursor ? (
+          <button
+            className="rounded-lg border border-emerald-700/70 bg-emerald-900/30 px-3 py-1.5 text-xs font-medium text-emerald-200 transition hover:bg-emerald-900/50"
+            type="button"
+            onClick={() => onAskCursor(message.id)}
+            data-testid="ask-cursor"
+          >
+            Ask Cursor
+          </button>
+        ) : null}
         {threads.map((thread, index) => {
           const active = thread.id === activeThreadId;
           return (
