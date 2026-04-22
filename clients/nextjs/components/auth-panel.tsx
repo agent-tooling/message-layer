@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { MessageSquare, Loader2 } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export function AuthPanel() {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -76,77 +79,118 @@ export function AuthPanel() {
 
   if (!setupChecked) {
     return (
-      <div className="mx-auto mt-16 w-full max-w-md rounded-2xl border border-zinc-800/80 bg-zinc-950/80 p-8 text-sm text-zinc-300 shadow-2xl shadow-black/40 backdrop-blur">
-        Loading setup...
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="flex items-center gap-3 text-sm text-zinc-400">
+          <Loader2 className="h-5 w-5 animate-spin" />
+          Loading setup…
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="mx-auto mt-16 w-full max-w-md rounded-2xl border border-zinc-800/80 bg-zinc-950/80 p-8 shadow-2xl shadow-black/40 backdrop-blur">
-      <div className="mb-6">
-        <p className="mb-2 text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">Message Layer Team Client</p>
-        <h1 className="text-3xl font-semibold tracking-tight">
-          {hasWorkspace ? (isSignUp ? "Create account" : "Sign in") : "Create workspace"}
-        </h1>
-        <p className="mt-2 text-sm leading-relaxed text-zinc-400">
-          {hasWorkspace
-            ? "Authenticate with Better Auth to join your workspace, channels, and agent onboarding controls."
-            : "Set the workspace name and create the first admin account."}
-        </p>
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        {/* Logo */}
+        <div className="mb-8 flex flex-col items-center">
+          <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10">
+            <MessageSquare className="h-6 w-6 text-emerald-400" />
+          </div>
+          <h1 className="mt-4 text-xl font-semibold tracking-tight text-zinc-100">
+            Message Layer
+          </h1>
+          <p className="mt-1 text-xs text-zinc-500">
+            Team + agent coordination layer
+          </p>
+        </div>
+
+        {/* Card */}
+        <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-6">
+          <h2 className="text-lg font-semibold tracking-tight text-zinc-100">
+            {hasWorkspace ? (isSignUp ? "Create account" : "Sign in") : "Create workspace"}
+          </h2>
+          <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+            {hasWorkspace
+              ? "Authenticate to join your workspace, channels, and agent controls."
+              : "Set the workspace name and create the first admin account."}
+          </p>
+
+          <form className="mt-5 space-y-3" onSubmit={onSubmit}>
+            {!hasWorkspace && (
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-zinc-400">
+                  Workspace name
+                </label>
+                <Input
+                  placeholder="My Team"
+                  value={workspaceName}
+                  onChange={(e) => setWorkspaceName(e.target.value)}
+                  required
+                />
+              </div>
+            )}
+            {isSignUp && (
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-zinc-400">
+                  Name
+                </label>
+                <Input
+                  placeholder="Your name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                />
+              </div>
+            )}
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-400">
+                Email
+              </label>
+              <Input
+                placeholder="you@company.com"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-zinc-400">
+                Password
+              </label>
+              <Input
+                placeholder="••••••••"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+
+            {error && (
+              <div className="rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+                {error}
+              </div>
+            )}
+
+            <Button type="submit" className="w-full" disabled={pending}>
+              {pending && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+              {pending ? "Working…" : hasWorkspace ? (isSignUp ? "Create account" : "Sign in") : "Create workspace"}
+            </Button>
+          </form>
+
+          {hasWorkspace && (
+            <div className="mt-4 text-center">
+              <button
+                className="text-xs text-zinc-400 transition hover:text-zinc-200"
+                type="button"
+                onClick={() => setIsSignUp((v) => !v)}
+              >
+                {isSignUp ? "Already have an account? Sign in" : "Need an account? Sign up"}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
-      <form className="space-y-3" onSubmit={onSubmit}>
-        {!hasWorkspace ? (
-          <input
-            className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2.5 text-sm outline-none transition focus:border-emerald-500/70"
-            placeholder="Workspace name"
-            value={workspaceName}
-            onChange={(event) => setWorkspaceName(event.target.value)}
-            required
-          />
-        ) : null}
-        {isSignUp ? (
-          <input
-            className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2.5 text-sm outline-none transition focus:border-emerald-500/70"
-            placeholder="Name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-          />
-        ) : null}
-        <input
-          className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2.5 text-sm outline-none transition focus:border-emerald-500/70"
-          placeholder="Email"
-          type="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          required
-        />
-        <input
-          className="w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2.5 text-sm outline-none transition focus:border-emerald-500/70"
-          placeholder="Password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-        />
-        {error ? <p className="text-sm text-red-400">{error}</p> : null}
-        <button
-          type="submit"
-          className="w-full rounded-lg bg-emerald-600 px-3 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-500 disabled:opacity-60"
-          disabled={pending}
-        >
-          {pending ? "Working..." : hasWorkspace ? (isSignUp ? "Create account" : "Sign in") : "Create workspace"}
-        </button>
-      </form>
-      {hasWorkspace ? (
-        <button
-          className="mt-5 text-sm text-zinc-300 underline underline-offset-4"
-          type="button"
-          onClick={() => setIsSignUp((value) => !value)}
-        >
-          {isSignUp ? "Already have an account? Sign in" : "Need an account? Sign up"}
-        </button>
-      ) : null}
     </div>
   );
 }

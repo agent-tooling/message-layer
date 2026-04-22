@@ -2,7 +2,34 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import {
+  Hash,
+  Lock,
+  Plus,
+  Search,
+  Settings,
+  LogOut,
+  Users,
+  Bot,
+  Brain,
+  Webhook,
+  MessageSquare,
+  Send,
+  Paperclip,
+  ShieldCheck,
+  ChevronDown,
+  AtSign,
+  Slash,
+  X,
+  Star,
+  Globe,
+  UserPlus,
+  MailPlus,
+  Copy,
+  Trash2,
+} from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { cn } from "@/lib/utils";
 import {
   applyCommandSelection,
   applyMentionSelection,
@@ -18,6 +45,17 @@ import {
 } from "@/components/approval-inbox";
 import { MessageCard } from "@/components/message-card";
 import { ThreadPanel } from "@/components/thread-panel";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Avatar } from "@/components/ui/avatar";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
+import { CollapsibleSection } from "@/components/ui/section";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Dialog, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Tooltip } from "@/components/ui/tooltip";
 
 type Channel = { id: string; name: string; visibility: string };
 type Message = {
@@ -133,6 +171,8 @@ export function TeamWorkspace() {
   const [searchAvailable, setSearchAvailable] = useState(true);
   const [searchOpen, setSearchOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showNewChannel, setShowNewChannel] = useState(false);
+  const [showInvite, setShowInvite] = useState(false);
 
   const activeThreads = threadsByChannel[activeChannelId] ?? [];
   const activeChannel =
@@ -146,7 +186,6 @@ export function TeamWorkspace() {
       list.push(thread);
       map[thread.parentMessageId] = list;
     }
-    // Keep a stable chronological ordering so "Thread 1" stays "Thread 1".
     for (const key of Object.keys(map)) {
       map[key].sort((a, b) => {
         const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
@@ -392,18 +431,12 @@ export function TeamWorkspace() {
       })
       .catch((err) => setError((err as Error).message));
     void refreshDirectory().catch((err) => setError((err as Error).message));
-    void refreshWebhooks().catch(() => {
-      // optional when plugin is not enabled
-    });
-    void refreshApprovals().catch(() => {
-      // approvals are optional; silent fail
-    });
+    void refreshWebhooks().catch(() => {});
+    void refreshApprovals().catch(() => {});
   }, [session]);
 
   useEffect(() => {
     if (!activeChannelId) return;
-    // Close any open thread when switching channels so the right panel
-    // never shows a thread from a channel the user just left.
     setActiveThreadId(null);
     void refreshMessages(activeChannelId).catch((err) =>
       setError((err as Error).message),
@@ -414,12 +447,8 @@ export function TeamWorkspace() {
     void refreshCommands(activeChannelId).catch((err) =>
       setError((err as Error).message),
     );
-    void refreshChannelMembers(activeChannelId).catch(() => {
-      // channel member listing is optional for restricted channels
-    });
-    void refreshMemory(activeChannelId).catch(() => {
-      // memory plugin is optional
-    });
+    void refreshChannelMembers(activeChannelId).catch(() => {});
+    void refreshMemory(activeChannelId).catch(() => {});
     const timer = setInterval(() => {
       void refreshMessages(activeChannelId).catch(() => {});
       void refreshThreads(activeChannelId).catch(() => {});
@@ -450,9 +479,6 @@ export function TeamWorkspace() {
     return () => clearTimeout(handle);
   }, [searchQuery, searchOpen]);
 
-  // If the open thread vanishes from the active channel (e.g. channel
-  // switched, thread deleted server-side) clear the selection so stale
-  // thread ids never leak into the right panel.
   useEffect(() => {
     if (!activeThreadId) return;
     const stillPresent = activeThreads.some(
@@ -594,6 +620,7 @@ export function TeamWorkspace() {
       }
       setNewChannelName("");
       setNewChannelVisibility("public");
+      setShowNewChannel(false);
       await refreshDirectory();
       setActiveChannelId(payload.channelId);
     } catch (err) {
@@ -748,8 +775,6 @@ export function TeamWorkspace() {
         },
       );
       await refreshThreads(activeChannelId);
-      // Auto-open the freshly created thread so the user lands directly
-      // in the composer — this is the "new thread" affordance.
       setActiveThreadId(result.threadId);
     } catch (err) {
       setError((err as Error).message);
@@ -785,366 +810,440 @@ export function TeamWorkspace() {
     void navigator.clipboard?.writeText(inviteLink).catch(() => {});
   }
 
+  const publicChannels = channels.filter((c) => c.visibility === "public");
+  const privateChannels = channels.filter((c) => c.visibility === "private");
+
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100">
-      <aside className="flex w-80 flex-col overflow-y-auto border-r border-zinc-800/80 bg-zinc-950/90 px-4 py-5">
-        <div className="mb-5 border-b border-zinc-800/80 pb-4">
-          <p className="text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">
-            Workspace
-          </p>
-          <h2 className="mt-2 text-xl font-semibold tracking-tight">
-            Team Messaging
-          </h2>
-          <p className="mt-1 text-xs text-zinc-400">
-            Team + agents on message-layer
-          </p>
+      {/* ─── Sidebar ─── */}
+      <aside className="flex w-72 flex-col border-r border-zinc-800/60 bg-zinc-950">
+        {/* Workspace header */}
+        <div className="flex items-center justify-between px-4 py-4">
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-100">
+              Message Layer
+            </h2>
+            <p className="text-[11px] text-zinc-500">Team workspace</p>
+          </div>
+          <div className="flex items-center gap-1">
+            <Tooltip content="Invite teammate">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setShowInvite(true)}
+              >
+                <UserPlus className="h-4 w-4" />
+              </Button>
+            </Tooltip>
+          </div>
         </div>
 
-        <div>
-          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
-            Channels
-          </h3>
-        </div>
-        <div className="mt-3 space-y-1.5">
-          {channels.map((channel) => (
-            <div
-              key={channel.id}
-              className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition ${
-                channel.id === activeChannelId
-                  ? "border-emerald-500/40 bg-emerald-500/15"
-                  : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
-              }`}
-            >
-              <button
-                className="min-w-0 flex-1 px-1 py-0.5 text-left text-sm text-zinc-200"
-                onClick={() => setActiveChannelId(channel.id)}
-                type="button"
-              >
-                <span className="truncate">#{channel.name}</span>
-                <span className="ml-2 text-[10px] uppercase tracking-wide text-zinc-500">
-                  {channel.visibility}
-                </span>
-              </button>
-              {canDeleteChannels ? (
+        <Separator />
+
+        {/* Sidebar content */}
+        <div className="flex-1 overflow-y-auto px-3 py-3">
+          {/* Channels */}
+          <CollapsibleSection
+            title="Channels"
+            icon={<Hash className="h-3.5 w-3.5" />}
+            badge={
+              <Tooltip content="New channel">
                 <button
                   type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void deleteExistingChannel(channel.id, channel.name);
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowNewChannel(!showNewChannel);
                   }}
-                  className="rounded border border-zinc-700 px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-400 transition hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-300"
+                  className="ml-auto rounded p-0.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-300"
                 >
-                  Delete
+                  <Plus className="h-3.5 w-3.5" />
                 </button>
-              ) : null}
-            </div>
-          ))}
-        </div>
-        <div className="mt-3 flex gap-2">
-          <input
-            className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-sm outline-none transition focus:border-emerald-500/70"
-            placeholder="new channel"
-            value={newChannelName}
-            onChange={(event) => setNewChannelName(event.target.value)}
-          />
-          <select
-            className="rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs uppercase text-zinc-300"
-            value={newChannelVisibility}
-            onChange={(event) =>
-              setNewChannelVisibility(
-                event.target.value === "private" ? "private" : "public",
-              )
+              </Tooltip>
             }
           >
-            <option value="public">public</option>
-            <option value="private">private</option>
-          </select>
-          <button
-            className="rounded-lg bg-zinc-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-900 transition hover:bg-white"
-            onClick={createNewChannel}
-            type="button"
-          >
-            Add
-          </button>
-        </div>
-        <div className="mt-2 flex gap-2">
-          <select
-            className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-200"
-            value={dmTargetActorId}
-            onChange={(event) => setDmTargetActorId(event.target.value)}
-          >
-            <option value="">start DM with…</option>
-            {dmCandidates.map((member) => (
-              <option key={member.actorId} value={member.actorId}>
-                {member.displayName} ({member.actorType})
-              </option>
-            ))}
-          </select>
-          <button
-            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
-            onClick={startDirectMessage}
-            type="button"
-            disabled={!dmTargetActorId}
-          >
-            DM
-          </button>
-        </div>
-
-        {isActivePrivateChannel ? (
-          <button
-            type="button"
-            onClick={() => setIsPrivateSettingsOpen(true)}
-            className="mt-4 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
-          >
-            Manage private channel
-          </button>
-        ) : null}
-
-        <div className="mt-6 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3">
-          <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
-            People
-          </h3>
-          <ul className="mt-2 space-y-1.5 text-sm text-zinc-300">
-            {humanMembers.map((member) => (
-              <li
-                key={member.actorId}
-                className="flex items-center justify-between gap-2"
-              >
-                <div className="min-w-0">
-                  <span className="block truncate">{member.displayName}</span>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    <span className="rounded bg-zinc-800 px-2 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
-                      {member.actorType}
-                    </span>
-                    {member.appRole ? (
-                      <span className="rounded bg-blue-950 px-2 py-0.5 text-[10px] uppercase tracking-wide text-blue-300">
-                        role:{member.appRole}
-                      </span>
-                    ) : null}
-                  </div>
-                  <p className="mt-1 truncate text-[10px] text-zinc-500">
-                    grants: {member.effectiveCapabilities.join(", ") || "none"}
-                  </p>
-                </div>
-                {member.appRole !== "owner" ? (
-                  <select
-                    className="rounded border border-zinc-700 bg-zinc-900 px-1.5 py-1 text-[10px] uppercase text-zinc-300"
-                    value={member.appRole ?? "member"}
-                    onChange={(event) =>
-                      void updateMemberRole(
-                        member.actorId,
-                        event.target.value === "admin" ? "admin" : "member",
+            {showNewChannel && (
+              <div className="mb-2 space-y-2 rounded-lg border border-zinc-800/60 bg-zinc-900/40 p-2.5">
+                <Input
+                  placeholder="Channel name"
+                  value={newChannelName}
+                  onChange={(e) => setNewChannelName(e.target.value)}
+                  className="h-8 text-xs"
+                />
+                <div className="flex gap-2">
+                  <Select
+                    className="h-8 flex-1 text-xs"
+                    value={newChannelVisibility}
+                    onChange={(e) =>
+                      setNewChannelVisibility(
+                        e.target.value === "private" ? "private" : "public",
                       )
                     }
                   >
-                    <option value="member">member</option>
-                    <option value="admin">admin</option>
-                  </select>
-                ) : null}
-              </li>
-            ))}
-            {humanMembers.length === 0 ? (
-              <li className="text-xs text-zinc-500">No members yet.</li>
-            ) : null}
-          </ul>
-        </div>
+                    <option value="public">Public</option>
+                    <option value="private">Private</option>
+                  </Select>
+                  <Button size="sm" onClick={createNewChannel}>
+                    Create
+                  </Button>
+                </div>
+              </div>
+            )}
 
-        <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
-            Invite teammate
-          </p>
-          <input
-            className="mt-2 w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-sm outline-none transition focus:border-emerald-500/70"
-            placeholder="teammate@company.com"
-            value={inviteEmail}
-            onChange={(event) => setInviteEmail(event.target.value)}
-          />
-          <select
-            className="mt-2 w-full rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-sm outline-none transition focus:border-emerald-500/70"
-            value={inviteRole}
-            onChange={(event) =>
-              setInviteRole(event.target.value === "admin" ? "admin" : "member")
-            }
-          >
-            <option value="member">member</option>
-            <option value="admin">admin</option>
-          </select>
-          <button
-            className="mt-2 w-full rounded-lg bg-zinc-100 px-3 py-2 text-sm font-medium text-zinc-900 transition hover:bg-white"
-            onClick={createInvite}
-            type="button"
-          >
-            Generate invite link
-          </button>
-          {inviteLink ? (
-            <div className="mt-2 space-y-1">
-              <p className="break-all rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1.5 text-[11px] text-emerald-300">
-                {inviteLink}
-              </p>
-              <button
-                type="button"
-                onClick={copyInviteLink}
-                className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-300 transition hover:bg-zinc-800"
-              >
-                Copy link
-              </button>
+            <div className="space-y-0.5">
+              {publicChannels.map((channel) => (
+                <ChannelItem
+                  key={channel.id}
+                  channel={channel}
+                  isActive={channel.id === activeChannelId}
+                  canDelete={canDeleteChannels}
+                  onClick={() => setActiveChannelId(channel.id)}
+                  onDelete={() =>
+                    void deleteExistingChannel(channel.id, channel.name)
+                  }
+                />
+              ))}
             </div>
-          ) : null}
-        </div>
 
-        <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
-            Agents
-          </p>
-          {agents.length > 0 ? (
-            <ul className="mt-2 space-y-1 text-zinc-300">
-              {agents.map((agent) => (
-                <li
-                  key={agent.actorId}
-                  className="flex items-center justify-between gap-2"
+            {privateChannels.length > 0 && (
+              <div className="mt-2">
+                <p className="mb-1 px-2 text-[10px] font-medium uppercase tracking-wider text-zinc-600">
+                  Private
+                </p>
+                <div className="space-y-0.5">
+                  {privateChannels.map((channel) => (
+                    <ChannelItem
+                      key={channel.id}
+                      channel={channel}
+                      isActive={channel.id === activeChannelId}
+                      canDelete={canDeleteChannels}
+                      onClick={() => setActiveChannelId(channel.id)}
+                      onDelete={() =>
+                        void deleteExistingChannel(channel.id, channel.name)
+                      }
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+          </CollapsibleSection>
+
+          {/* Direct messages */}
+          <div className="mt-3">
+            <CollapsibleSection
+              title="Direct Messages"
+              icon={<MessageSquare className="h-3.5 w-3.5" />}
+            >
+              <div className="flex gap-1.5">
+                <Select
+                  className="h-8 flex-1 text-xs"
+                  value={dmTargetActorId}
+                  onChange={(e) => setDmTargetActorId(e.target.value)}
                 >
-                  <span className="truncate">{agent.displayName}</span>
-                  <span className="text-zinc-500">
-                    {agent.actorId.slice(0, 8)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p className="mt-2">No agents onboarded yet.</p>
-          )}
-          <div className="mt-3 space-y-1 border-t border-zinc-800/60 pt-3 text-[11px] text-zinc-500">
-            <p>
-              Discovery: <code>/.well-known/agent-configuration</code>
-            </p>
-            <p>
-              Auth base: <code>/api/auth</code>
-            </p>
-            <p>Agents run externally via Agent Auth.</p>
+                  <option value="">Select…</option>
+                  {dmCandidates.map((member) => (
+                    <option key={member.actorId} value={member.actorId}>
+                      {member.displayName} ({member.actorType})
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={startDirectMessage}
+                  disabled={!dmTargetActorId}
+                >
+                  <Send className="h-3 w-3" />
+                </Button>
+              </div>
+            </CollapsibleSection>
           </div>
-        </div>
 
-        <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
-            Memory
-          </p>
-          {!memoryAvailable ? (
-            <p className="mt-2">Memory plugin is not enabled.</p>
-          ) : memoryDenied ? (
-            <p className="mt-2">No access to this channel&apos;s memory.</p>
-          ) : memoryUnits.length === 0 ? (
-            <p className="mt-2">No derived memory yet for this channel.</p>
-          ) : (
-            <ul className="mt-2 space-y-2">
-              {memoryUnits.map((unit) => (
-                <li
-                  key={unit.id}
-                  className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-2"
+          <Separator className="my-3" />
+
+          {/* People */}
+          <CollapsibleSection
+            title="People"
+            icon={<Users className="h-3.5 w-3.5" />}
+            badge={
+              <Badge variant="secondary" className="ml-auto">
+                {humanMembers.length}
+              </Badge>
+            }
+            defaultOpen={false}
+          >
+            <div className="space-y-1">
+              {humanMembers.map((member) => (
+                <div
+                  key={member.actorId}
+                  className="group flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition hover:bg-zinc-800/50"
                 >
-                  <p className="break-words text-zinc-200">{unit.summary}</p>
-                  <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] uppercase tracking-wide">
-                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">
-                      {unit.sourceVisibility}
-                    </span>
-                    {unit.promoted ? (
-                      <span className="rounded bg-yellow-500/20 px-1.5 py-0.5 text-yellow-200">
-                        ★ promoted
-                      </span>
-                    ) : null}
-                    <span className="text-zinc-500">
-                      {unit.sourceMessageIds.length} src
-                    </span>
-                  </div>
-                  {unit.keywords.length > 0 ? (
-                    <p className="mt-1 truncate text-[10px] text-zinc-500">
-                      kw: {unit.keywords.slice(0, 5).join(", ")}
+                  <Avatar
+                    name={member.displayName}
+                    type={member.actorType}
+                    size="sm"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium text-zinc-200">
+                      {member.displayName}
                     </p>
-                  ) : null}
-                  {!unit.promoted ? (
-                    <button
-                      type="button"
-                      onClick={() => void promoteMemoryUnit(unit.id)}
-                      className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 transition hover:bg-zinc-800"
+                    <div className="flex items-center gap-1">
+                      {member.appRole && (
+                        <Badge variant="sky" className="text-[9px]">
+                          {member.appRole}
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  {member.appRole !== "owner" && (
+                    <Select
+                      className="hidden h-6 w-20 text-[10px] group-hover:block"
+                      value={member.appRole ?? "member"}
+                      onChange={(e) =>
+                        void updateMemberRole(
+                          member.actorId,
+                          e.target.value === "admin" ? "admin" : "member",
+                        )
+                      }
                     >
-                      Promote org-wide
-                    </button>
-                  ) : null}
-                </li>
+                      <option value="member">member</option>
+                      <option value="admin">admin</option>
+                    </Select>
+                  )}
+                </div>
               ))}
-            </ul>
+              {humanMembers.length === 0 && (
+                <p className="px-2 text-xs text-zinc-500">No members yet.</p>
+              )}
+            </div>
+          </CollapsibleSection>
+
+          {/* Agents */}
+          <div className="mt-2">
+            <CollapsibleSection
+              title="Agents"
+              icon={<Bot className="h-3.5 w-3.5" />}
+              badge={
+                <Badge variant="emerald" className="ml-auto">
+                  {agents.length}
+                </Badge>
+              }
+              defaultOpen={false}
+            >
+              {agents.length > 0 ? (
+                <div className="space-y-1">
+                  {agents.map((agent) => (
+                    <div
+                      key={agent.actorId}
+                      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition hover:bg-zinc-800/50"
+                    >
+                      <Avatar
+                        name={agent.displayName}
+                        type="agent"
+                        size="sm"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-xs font-medium text-zinc-200">
+                          {agent.displayName}
+                        </p>
+                        <p className="truncate text-[10px] text-zinc-500">
+                          {agent.actorId.slice(0, 8)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-2 text-xs text-zinc-500">
+                  No agents onboarded yet.
+                </p>
+              )}
+            </CollapsibleSection>
+          </div>
+
+          {/* Memory */}
+          <div className="mt-2">
+            <CollapsibleSection
+              title="Memory"
+              icon={<Brain className="h-3.5 w-3.5" />}
+              defaultOpen={false}
+            >
+              {!memoryAvailable ? (
+                <p className="px-2 text-xs text-zinc-500">
+                  Memory plugin is not enabled.
+                </p>
+              ) : memoryDenied ? (
+                <p className="px-2 text-xs text-zinc-500">
+                  No access to this channel&apos;s memory.
+                </p>
+              ) : memoryUnits.length === 0 ? (
+                <p className="px-2 text-xs text-zinc-500">
+                  No derived memory yet.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {memoryUnits.map((unit) => (
+                    <div
+                      key={unit.id}
+                      className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 px-2.5 py-2"
+                    >
+                      <p className="text-xs leading-relaxed text-zinc-300">
+                        {unit.summary}
+                      </p>
+                      <div className="mt-1.5 flex items-center gap-1">
+                        <Badge variant="secondary">
+                          {unit.sourceVisibility}
+                        </Badge>
+                        {unit.promoted && (
+                          <Badge variant="amber">
+                            <Star className="mr-0.5 h-2.5 w-2.5" />
+                            promoted
+                          </Badge>
+                        )}
+                        <span className="text-[10px] text-zinc-600">
+                          {unit.sourceMessageIds.length} src
+                        </span>
+                      </div>
+                      {!unit.promoted && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="mt-1.5 h-6 w-full text-[10px]"
+                          onClick={() => void promoteMemoryUnit(unit.id)}
+                        >
+                          <Globe className="mr-1 h-3 w-3" />
+                          Promote org-wide
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CollapsibleSection>
+          </div>
+
+          {/* Webhooks */}
+          <div className="mt-2">
+            <CollapsibleSection
+              title="Webhooks"
+              icon={<Webhook className="h-3.5 w-3.5" />}
+              defaultOpen={false}
+            >
+              {!webhooksAvailable ? (
+                <p className="px-2 text-xs text-zinc-500">
+                  Webhook plugin is not enabled.
+                </p>
+              ) : webhooks.length === 0 ? (
+                <p className="px-2 text-xs text-zinc-500">
+                  No webhook subscriptions yet.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {webhooks.map((hook) => (
+                    <div
+                      key={hook.id}
+                      className="rounded-lg border border-zinc-800/60 bg-zinc-900/40 px-2.5 py-2"
+                    >
+                      <p className="truncate text-xs text-zinc-300">
+                        {hook.endpoint}
+                      </p>
+                      <p className="mt-0.5 text-[10px] text-zinc-500">
+                        {hook.eventTypes.join(", ")}
+                        {hook.streamId
+                          ? ` · ${hook.streamId.slice(0, 8)}`
+                          : " · org-wide"}
+                      </p>
+                      {!hook.enabled && (
+                        <Badge variant="amber" className="mt-1">
+                          disabled
+                        </Badge>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CollapsibleSection>
+          </div>
+
+          {/* Private channel settings */}
+          {isActivePrivateChannel && (
+            <div className="mt-3">
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={() => setIsPrivateSettingsOpen(true)}
+              >
+                <Settings className="mr-1.5 h-3.5 w-3.5" />
+                Manage private channel
+              </Button>
+            </div>
           )}
-          <p className="mt-3 border-t border-zinc-800/60 pt-2 text-[11px] text-zinc-500">
-            Derived from <code>message.appended</code> events. Source
-            visibility is snapshotted; promotion requires{" "}
-            <code>memory:promote</code>.
-          </p>
         </div>
 
-        <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
-            Webhooks
-          </p>
-          {!webhooksAvailable ? (
-            <p className="mt-2">Webhook plugin is not enabled.</p>
-          ) : webhooks.length === 0 ? (
-            <p className="mt-2">No webhook subscriptions yet.</p>
-          ) : (
-            <ul className="mt-2 space-y-2">
-              {webhooks.map((hook) => (
-                <li
-                  key={hook.id}
-                  className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-2"
-                >
-                  <p className="truncate text-zinc-300">{hook.endpoint}</p>
-                  <p className="mt-1 text-[11px] text-zinc-500">
-                    {hook.eventTypes.join(", ")}
-                    {hook.streamId
-                      ? ` · stream ${hook.streamId.slice(0, 8)}`
-                      : " · org-wide"}
-                  </p>
-                  {!hook.enabled ? (
-                    <p className="mt-1 text-[11px] text-amber-300">disabled</p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <div className="mt-auto pt-4 text-xs text-zinc-500">
-          Signed in as{" "}
-          <span className="text-zinc-300">
-            {session?.user?.email ?? "unknown"}
-          </span>
+        {/* User footer */}
+        <Separator />
+        <div className="flex items-center gap-2.5 px-4 py-3">
+          <Avatar
+            name={session?.user?.email ?? "U"}
+            type="human"
+            size="sm"
+          />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs font-medium text-zinc-300">
+              {session?.user?.email ?? "unknown"}
+            </p>
+          </div>
+          <Tooltip content="Sign out">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => authClient.signOut()}
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </Button>
+          </Tooltip>
         </div>
       </aside>
 
+      {/* ─── Main content ─── */}
       <main className="flex flex-1 flex-col">
-        <header className="flex items-center justify-between border-b border-zinc-800/80 bg-zinc-950/70 px-6 py-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.14em] text-zinc-500">
-              Active channel
-            </p>
-            <p className="mt-1 text-base font-semibold text-zinc-100">
-              #
-              {channels.find((channel) => channel.id === activeChannelId)
-                ?.name ?? "Select a channel"}
-            </p>
+        {/* Header */}
+        <header className="flex items-center justify-between border-b border-zinc-800/60 bg-zinc-950/80 px-5 py-3">
+          <div className="flex items-center gap-3">
+            {activeChannel?.visibility === "private" ? (
+              <Lock className="h-4 w-4 text-zinc-500" />
+            ) : (
+              <Hash className="h-4 w-4 text-zinc-500" />
+            )}
+            <div>
+              <h1 className="text-sm font-semibold text-zinc-100">
+                {activeChannel?.name ?? "Select a channel"}
+              </h1>
+              {activeThreads.length > 0 && (
+                <p className="text-[11px] text-zinc-500">
+                  {activeThreads.length} thread
+                  {activeThreads.length === 1 ? "" : "s"}
+                </p>
+              )}
+            </div>
           </div>
+
+          {/* Search */}
           <div className="relative mx-4 hidden max-w-md flex-1 md:block">
-            <input
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+            <Input
               type="search"
-              placeholder="Search actors, channels, threads, messages, memory…"
+              placeholder="Search messages, channels, memory…"
               value={searchQuery}
               onFocus={() => setSearchOpen(true)}
-              onChange={(event) => {
-                setSearchQuery(event.target.value);
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
                 setSearchOpen(true);
               }}
               onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-emerald-500/70"
+              className="h-8 pl-9 text-xs"
             />
-            {searchOpen && searchQuery.trim().length > 0 ? (
+            {searchOpen && searchQuery.trim().length > 0 && (
               <div className="absolute left-0 right-0 z-30 mt-1 max-h-96 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/60">
                 {!searchAvailable ? (
                   <p className="px-4 py-3 text-xs text-zinc-500">
@@ -1158,8 +1257,8 @@ export function TeamWorkspace() {
                       <li key={hit.documentId}>
                         <button
                           type="button"
-                          className="block w-full px-4 py-2 text-left text-sm text-zinc-200 transition hover:bg-zinc-900"
-                          onMouseDown={(event) => event.preventDefault()}
+                          className="block w-full px-4 py-2.5 text-left text-sm text-zinc-200 transition hover:bg-zinc-900/60"
+                          onMouseDown={(e) => e.preventDefault()}
                           onClick={() => {
                             if (hit.entityType === "channel") {
                               setActiveChannelId(hit.entityId);
@@ -1178,184 +1277,187 @@ export function TeamWorkspace() {
                           }}
                         >
                           <div className="flex items-center gap-2">
-                            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+                            <Badge variant="secondary">
                               {hit.entityType}
-                              {hit.actorType ? `·${hit.actorType}` : ""}
-                            </span>
-                            <span className="truncate font-medium">
+                              {hit.actorType ? ` · ${hit.actorType}` : ""}
+                            </Badge>
+                            <span className="truncate text-xs font-medium">
                               {hit.title}
                             </span>
-                            {hit.promoted ? (
-                              <span className="text-[10px] text-yellow-300">
-                                ★
-                              </span>
-                            ) : null}
+                            {hit.promoted && (
+                              <Star className="h-3 w-3 text-yellow-400" />
+                            )}
                           </div>
-                          {hit.snippet ? (
+                          {hit.snippet && (
                             <p className="mt-1 truncate text-[11px] text-zinc-500">
                               {hit.snippet}
                             </p>
-                          ) : null}
+                          )}
                         </button>
                       </li>
                     ))}
                   </ul>
                 )}
               </div>
-            ) : null}
+            )}
           </div>
+
           <div className="flex items-center gap-2">
-            {canResolveApprovals && approvals.length > 0 ? (
-              <span className="rounded-full bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-300">
-                {approvals.length} approval{approvals.length === 1 ? "" : "s"}{" "}
-                pending
-              </span>
-            ) : null}
+            {canResolveApprovals && approvals.length > 0 && (
+              <Badge variant="amber" className="gap-1 text-[11px]">
+                <ShieldCheck className="h-3 w-3" />
+                {approvals.length} pending
+              </Badge>
+            )}
             <details className="group relative">
-              <summary className="list-none cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800">
-                Admin ▾
+              <summary className="list-none">
+                <Button variant="outline" size="sm" className="gap-1">
+                  <Settings className="h-3.5 w-3.5" />
+                  Admin
+                  <ChevronDown className="h-3 w-3" />
+                </Button>
               </summary>
-              <div className="absolute right-0 z-20 mt-2 min-w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-lg shadow-black/50">
+              <div className="absolute right-0 z-20 mt-1.5 min-w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-lg shadow-black/50">
                 <Link
                   href="/admin"
-                  className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100"
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800/80 hover:text-zinc-100"
                 >
                   Overview
                 </Link>
                 <Link
                   href="/admin/agents"
-                  className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100"
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800/80 hover:text-zinc-100"
                 >
+                  <Bot className="h-3.5 w-3.5" />
                   Agents
                 </Link>
                 <Link
                   href="/admin/activity"
-                  className="block rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-900 hover:text-zinc-100"
+                  className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-zinc-300 transition hover:bg-zinc-800/80 hover:text-zinc-100"
                 >
                   Activity
                 </Link>
               </div>
             </details>
-            <button
-              className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
-              onClick={() => authClient.signOut()}
-              type="button"
-            >
-              Sign out
-            </button>
           </div>
         </header>
 
-        {canResolveApprovals ? (
+        {/* Approval inbox */}
+        {canResolveApprovals && (
           <ApprovalInbox
             approvals={approvals}
             actorsById={actorsById}
             channelsById={channelsById}
             onResolve={resolveApproval}
           />
-        ) : null}
+        )}
 
-        <div className="flex-1 overflow-y-auto px-6 py-6">
+        {/* Message list */}
+        <div className="flex-1 overflow-y-auto px-5 py-4">
           {messages.length === 0 ? (
-            <p className="mt-10 text-center text-sm text-zinc-500">
-              No messages yet. Say hi or wait for an agent to post.
-            </p>
-          ) : null}
-          {messages.map((message) => (
-            <MessageCard
-              key={message.id}
-              message={message}
-              actorsById={actorsById}
-              currentActorId={currentActorId}
-              threads={threadsByParentMessage[message.id] ?? []}
-              activeThreadId={activeThreadId}
-              onCreateThread={createThreadFromMessage}
-              onOpenThread={openThread}
+            <EmptyState
+              icon={<MessageSquare className="h-8 w-8" />}
+              title="No messages yet"
+              description="Say hi or wait for an agent to post."
             />
-          ))}
+          ) : (
+            <div className="space-y-1">
+              {messages.map((message) => (
+                <MessageCard
+                  key={message.id}
+                  message={message}
+                  actorsById={actorsById}
+                  currentActorId={currentActorId}
+                  threads={threadsByParentMessage[message.id] ?? []}
+                  activeThreadId={activeThreadId}
+                  onCreateThread={createThreadFromMessage}
+                  onOpenThread={openThread}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="border-t border-zinc-800/80 bg-zinc-950/80 p-5">
-          <form className="space-y-3" onSubmit={sendMessage}>
+        {/* Composer */}
+        <div className="border-t border-zinc-800/60 bg-zinc-950/90 px-5 py-3">
+          <form onSubmit={sendMessage}>
             <div className="relative">
-              <textarea
-                className="h-28 w-full rounded-xl border border-zinc-700/80 bg-zinc-900/80 p-3 text-sm leading-relaxed outline-none transition focus:border-emerald-500/70"
+              <Textarea
+                className="min-h-[80px] resize-none pr-12"
                 value={input}
-                onChange={(event) => setInput(event.target.value)}
+                onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleComposerKeyDown}
-                placeholder="Send a message... (@mention, /command)"
+                placeholder={`Message #${activeChannel?.name ?? "channel"}… (use @mention or /command)`}
               />
-              {mentionQuery !== null && mentionSuggestions.length > 0 ? (
-                <div className="absolute left-2 right-2 top-2 z-10 max-h-48 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
+              {/* Mention suggestions */}
+              {mentionQuery !== null && mentionSuggestions.length > 0 && (
+                <div className="absolute bottom-full left-0 right-0 z-10 mb-1 max-h-48 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
                   {mentionSuggestions.map((actor) => (
                     <button
                       key={actor.actorId}
                       type="button"
-                      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-zinc-200 transition hover:bg-zinc-800"
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition hover:bg-zinc-800"
                       onClick={() => selectMention(actor.displayName)}
                     >
-                      <span>@{actor.displayName}</span>
-                      <span className="text-zinc-500">{actor.actorType}</span>
+                      <AtSign className="h-3 w-3 text-sky-400" />
+                      <span className="text-zinc-200">{actor.displayName}</span>
+                      <Badge variant="secondary" className="ml-auto">
+                        {actor.actorType}
+                      </Badge>
                     </button>
                   ))}
                 </div>
-              ) : null}
-              {commandQuery !== null && slashSuggestions.length > 0 ? (
-                <div className="absolute left-2 right-2 top-2 z-10 max-h-48 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
+              )}
+              {/* Command suggestions */}
+              {commandQuery !== null && slashSuggestions.length > 0 && (
+                <div className="absolute bottom-full left-0 right-0 z-10 mb-1 max-h-48 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
                   {slashSuggestions.map((cmd) => (
                     <button
                       key={`${cmd.ownerActorId}:${cmd.name}`}
                       type="button"
-                      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-zinc-200 transition hover:bg-zinc-800"
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition hover:bg-zinc-800"
                       onClick={() => selectCommand(cmd.name)}
                     >
-                      <span>/{cmd.name}</span>
-                      <span className="truncate pl-2 text-zinc-500">
+                      <Slash className="h-3 w-3 text-indigo-400" />
+                      <span className="text-zinc-200">{cmd.name}</span>
+                      <span className="ml-auto truncate text-[10px] text-zinc-500">
                         {cmd.description ?? cmd.ownerActorId.slice(0, 8)}
                       </span>
                     </button>
                   ))}
                 </div>
-              ) : null}
+              )}
             </div>
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="inline-flex cursor-pointer items-center rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800">
-                Attach file
+            <div className="mt-2 flex items-center gap-2">
+              <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-zinc-100">
+                <Paperclip className="h-3.5 w-3.5" />
+                Attach
                 <input
                   className="hidden"
                   type="file"
                   onChange={uploadAttachment}
                 />
               </label>
-              <button
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-                type="submit"
-                disabled={!activeChannelId}
-              >
-                Send
-              </button>
-              {activeThreads.length > 0 ? (
-                <span className="text-xs text-zinc-500">
-                  {activeThreads.length} thread
-                  {activeThreads.length === 1 ? "" : "s"} in channel
+              <div className="flex-1" />
+              {pendingUpload.length > 0 && (
+                <span className="text-[11px] text-zinc-500">
+                  {pendingUpload.length} file{pendingUpload.length > 1 ? "s" : ""} attached
                 </span>
-              ) : null}
-              <span className="text-xs text-zinc-500">
-                Tip: use <code>@name</code> and <code>/poem</code>
-              </span>
+              )}
+              <Button type="submit" size="sm" disabled={!activeChannelId}>
+                <Send className="mr-1 h-3.5 w-3.5" />
+                Send
+              </Button>
             </div>
-            {pendingUpload.length > 0 ? (
-              <div className="text-xs text-zinc-400">
-                Pending attachments:{" "}
-                {pendingUpload.map((file) => file.name).join(", ")}
-              </div>
-            ) : null}
-            {error ? <p className="text-xs text-red-400">{error}</p> : null}
+            {error && (
+              <p className="mt-2 text-xs text-red-400">{error}</p>
+            )}
           </form>
         </div>
       </main>
 
-      {activeThread ? (
+      {/* Thread panel */}
+      {activeThread && (
         <ThreadPanel
           threadId={activeThread.id}
           threadIndex={activeThreadIndex >= 0 ? activeThreadIndex : 0}
@@ -1366,146 +1468,223 @@ export function TeamWorkspace() {
           currentActorId={currentActorId}
           onClose={closeThread}
         />
-      ) : null}
+      )}
 
-      {isActivePrivateChannel && isPrivateSettingsOpen ? (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
-          onClick={() => setIsPrivateSettingsOpen(false)}
-        >
-          <div
-            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl shadow-black/70"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-300">
-                  Private channel settings
-                </h3>
-                <p className="mt-1 text-xs text-zinc-500">
-                  Configure which humans, agents, and apps can attend this
-                  channel.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsPrivateSettingsOpen(false)}
-                className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-900"
-              >
-                Close
-              </button>
-            </div>
+      {/* Private channel settings dialog */}
+      <Dialog
+        open={isActivePrivateChannel && isPrivateSettingsOpen}
+        onClose={() => setIsPrivateSettingsOpen(false)}
+      >
+        <DialogHeader onClose={() => setIsPrivateSettingsOpen(false)}>
+          <DialogTitle>Private channel settings</DialogTitle>
+          <DialogDescription>
+            Configure which humans, agents, and apps can attend this channel.
+          </DialogDescription>
+        </DialogHeader>
 
-            <div className="mt-4 space-y-2">
-              <div className="flex gap-2">
-                <select
-                  className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs text-zinc-200"
-                  value={privateHumanActorId}
-                  onChange={(event) => setPrivateHumanActorId(event.target.value)}
-                >
-                  <option value="">add human…</option>
-                  {availablePrivateHumans.map((actor) => (
-                    <option key={actor.actorId} value={actor.actorId}>
-                      {actor.displayName}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => void addPrivateChannelAttendee(privateHumanActorId)}
-                  disabled={!privateHumanActorId}
-                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[11px] uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </div>
-              <div className="flex gap-2">
-                <select
-                  className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs text-zinc-200"
-                  value={privateAgentActorId}
-                  onChange={(event) => setPrivateAgentActorId(event.target.value)}
-                >
-                  <option value="">add agent…</option>
-                  {availablePrivateAgents.map((actor) => (
-                    <option key={actor.actorId} value={actor.actorId}>
-                      {actor.displayName}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => void addPrivateChannelAttendee(privateAgentActorId)}
-                  disabled={!privateAgentActorId}
-                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[11px] uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </div>
-              <div className="flex gap-2">
-                <select
-                  className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs text-zinc-200"
-                  value={privateAppActorId}
-                  onChange={(event) => setPrivateAppActorId(event.target.value)}
-                >
-                  <option value="">add app…</option>
-                  {availablePrivateApps.map((actor) => (
-                    <option key={actor.actorId} value={actor.actorId}>
-                      {actor.displayName}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => void addPrivateChannelAttendee(privateAppActorId)}
-                  disabled={!privateAppActorId}
-                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[11px] uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
-                >
-                  Add
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-4 border-t border-zinc-800/60 pt-3">
-              <p className="text-[11px] uppercase tracking-wide text-zinc-500">
-                Current attendees
-              </p>
-              {channelMembers.length === 0 ? (
-                <p className="mt-2 text-xs text-zinc-500">No attendees yet.</p>
-              ) : (
-                <ul className="mt-2 space-y-1.5 text-sm">
-                  {channelMembers.map((attendee) => {
-                    const actor = actorsById[attendee.actorId];
-                    const actorType = actor?.actorType ?? "unknown";
-                    const displayName = actor?.displayName ?? attendee.actorId;
-                    return (
-                      <li
-                        key={attendee.actorId}
-                        className="flex items-center justify-between gap-2 rounded border border-zinc-800/80 bg-zinc-900/60 px-2 py-1.5"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-zinc-200">{displayName}</p>
-                          <p className="text-[10px] uppercase tracking-wide text-zinc-500">
-                            {actorType} · {attendee.role}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void removePrivateChannelAttendee(attendee.actorId)
-                          }
-                          className="rounded border border-zinc-700 px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-400 transition hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-300"
-                        >
-                          Remove
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </div>
-          </div>
+        <div className="space-y-3">
+          <AddMemberRow
+            label="Add human"
+            options={availablePrivateHumans}
+            value={privateHumanActorId}
+            onChange={setPrivateHumanActorId}
+            onAdd={() => void addPrivateChannelAttendee(privateHumanActorId)}
+          />
+          <AddMemberRow
+            label="Add agent"
+            options={availablePrivateAgents}
+            value={privateAgentActorId}
+            onChange={setPrivateAgentActorId}
+            onAdd={() => void addPrivateChannelAttendee(privateAgentActorId)}
+          />
+          <AddMemberRow
+            label="Add app"
+            options={availablePrivateApps}
+            value={privateAppActorId}
+            onChange={setPrivateAppActorId}
+            onAdd={() => void addPrivateChannelAttendee(privateAppActorId)}
+          />
         </div>
-      ) : null}
+
+        <Separator className="my-4" />
+
+        <div>
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">
+            Current attendees
+          </p>
+          {channelMembers.length === 0 ? (
+            <p className="text-xs text-zinc-500">No attendees yet.</p>
+          ) : (
+            <div className="space-y-1.5">
+              {channelMembers.map((attendee) => {
+                const actor = actorsById[attendee.actorId];
+                const actorType = actor?.actorType ?? "unknown";
+                const displayName = actor?.displayName ?? attendee.actorId;
+                return (
+                  <div
+                    key={attendee.actorId}
+                    className="flex items-center gap-2.5 rounded-lg border border-zinc-800/60 bg-zinc-900/40 px-3 py-2"
+                  >
+                    <Avatar name={displayName} type={actorType} size="sm" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-zinc-200">
+                        {displayName}
+                      </p>
+                      <div className="flex gap-1">
+                        <Badge variant="secondary">{actorType}</Badge>
+                        <Badge variant="secondary">{attendee.role}</Badge>
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() =>
+                        void removePrivateChannelAttendee(attendee.actorId)
+                      }
+                      className="h-7 w-7 text-zinc-500 hover:text-red-400"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </Dialog>
+
+      {/* Invite dialog */}
+      <Dialog open={showInvite} onClose={() => setShowInvite(false)}>
+        <DialogHeader onClose={() => setShowInvite(false)}>
+          <DialogTitle>
+            <MailPlus className="mr-2 inline h-4 w-4" />
+            Invite teammate
+          </DialogTitle>
+          <DialogDescription>
+            Send an invite link via email to add people to your workspace.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-3">
+          <Input
+            placeholder="teammate@company.com"
+            type="email"
+            value={inviteEmail}
+            onChange={(e) => setInviteEmail(e.target.value)}
+          />
+          <Select
+            value={inviteRole}
+            onChange={(e) =>
+              setInviteRole(e.target.value === "admin" ? "admin" : "member")
+            }
+          >
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+          </Select>
+          <Button className="w-full" onClick={createInvite}>
+            Generate invite link
+          </Button>
+          {inviteLink && (
+            <div className="space-y-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+              <p className="break-all text-xs text-emerald-300">{inviteLink}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={copyInviteLink}
+              >
+                <Copy className="mr-1.5 h-3 w-3" />
+                Copy link
+              </Button>
+            </div>
+          )}
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+/* ── Subcomponents ── */
+
+function ChannelItem({
+  channel,
+  isActive,
+  canDelete,
+  onClick,
+  onDelete,
+}: {
+  channel: Channel;
+  isActive: boolean;
+  canDelete: boolean;
+  onClick: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      className={cn(
+        "group flex items-center gap-1.5 rounded-lg px-2 py-1.5 transition",
+        isActive
+          ? "bg-emerald-500/10 text-emerald-200"
+          : "text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200",
+      )}
+    >
+      {channel.visibility === "private" ? (
+        <Lock className="h-3.5 w-3.5 shrink-0 opacity-60" />
+      ) : (
+        <Hash className="h-3.5 w-3.5 shrink-0 opacity-60" />
+      )}
+      <button
+        type="button"
+        onClick={onClick}
+        className="min-w-0 flex-1 truncate text-left text-xs font-medium"
+      >
+        {channel.name}
+      </button>
+      {canDelete && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          className="hidden rounded p-0.5 text-zinc-600 transition hover:bg-red-500/10 hover:text-red-400 group-hover:block"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AddMemberRow({
+  label,
+  options,
+  value,
+  onChange,
+  onAdd,
+}: {
+  label: string;
+  options: ActorRow[];
+  value: string;
+  onChange: (v: string) => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="flex gap-2">
+      <Select
+        className="flex-1 text-xs"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        <option value="">{label}…</option>
+        {options.map((actor) => (
+          <option key={actor.actorId} value={actor.actorId}>
+            {actor.displayName}
+          </option>
+        ))}
+      </Select>
+      <Button variant="outline" size="sm" onClick={onAdd} disabled={!value}>
+        <Plus className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }

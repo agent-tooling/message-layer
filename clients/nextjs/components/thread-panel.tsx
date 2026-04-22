@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { X, Send, Paperclip, AtSign, Slash } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { MessageCard } from "@/components/message-card";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Avatar } from "@/components/ui/avatar";
+import { Separator } from "@/components/ui/separator";
 import {
   applyCommandSelection,
   applyMentionSelection,
@@ -193,148 +200,159 @@ export function ThreadPanel({
     }
   }
 
+  const parentActor = parentMessage
+    ? actorsById[parentMessage.actorId]
+    : null;
+
   return (
     <aside
-      className="flex w-[420px] flex-col border-l border-zinc-800/80 bg-zinc-950/95"
+      className="flex w-[400px] flex-col border-l border-zinc-800/60 bg-zinc-950"
       aria-label="thread panel"
     >
-      <header className="flex items-start justify-between gap-3 border-b border-zinc-800/80 px-5 py-4">
+      {/* Header */}
+      <header className="flex items-center justify-between border-b border-zinc-800/60 px-4 py-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-emerald-300">
-            Thread {threadIndex + 1} of {threadCount}
+          <p className="text-xs font-semibold text-zinc-100">
+            Thread {threadIndex + 1}
+            <span className="ml-1 font-normal text-zinc-500">of {threadCount}</span>
           </p>
-          <p className="mt-1 truncate text-xs text-zinc-500" title={threadId}>
-            id: {threadId.slice(0, 12)}…
+          <p className="mt-0.5 truncate text-[10px] text-zinc-600" title={threadId}>
+            {threadId.slice(0, 12)}…
           </p>
         </div>
-        <button
-          type="button"
-          className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800"
+        <Button
+          variant="ghost"
+          size="icon"
           onClick={onClose}
           data-testid="close-thread"
         >
-          Close
-        </button>
+          <X className="h-4 w-4" />
+        </Button>
       </header>
 
-      {parentMessage ? (
-        <div className="border-b border-zinc-800/80 bg-zinc-900/40 px-5 py-4 text-xs text-zinc-400">
-          <p className="mb-2 font-semibold uppercase tracking-[0.14em] text-zinc-500">Replying to</p>
-          <div className="rounded-lg border border-zinc-800 bg-zinc-950/80 p-3">
-            <div className="mb-1 text-[11px] text-zinc-500">
-              {actorsById[parentMessage.actorId]?.displayName ?? parentMessage.actorId.slice(0, 10)}
-              <span className="ml-2 text-zinc-600">
-                {new Date(parentMessage.createdAt).toLocaleTimeString()}
-              </span>
-            </div>
-            <div className="max-h-32 overflow-hidden text-sm leading-relaxed text-zinc-200">
-              {parentMessage.parts.map((part, index) => {
-                if (part.type === "text") {
+      {/* Parent message preview */}
+      {parentMessage && (
+        <div className="border-b border-zinc-800/60 bg-zinc-900/20 px-4 py-3">
+          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            Replying to
+          </p>
+          <div className="flex gap-2.5 rounded-lg border border-zinc-800/40 bg-zinc-950/60 p-2.5">
+            {parentActor && (
+              <Avatar name={parentActor.displayName} type={parentActor.actorType} size="sm" className="mt-0.5" />
+            )}
+            <div className="min-w-0 flex-1">
+              <p className="text-[11px] font-medium text-zinc-300">
+                {parentActor?.displayName ?? parentMessage.actorId.slice(0, 10)}
+              </p>
+              <div className="mt-0.5 max-h-20 overflow-hidden text-xs leading-relaxed text-zinc-400">
+                {parentMessage.parts.map((part, index) => {
+                  if (part.type === "text") {
+                    return (
+                      <p key={index} className="whitespace-pre-wrap">
+                        {String(part.payload.text ?? "")}
+                      </p>
+                    );
+                  }
                   return (
-                    <p key={index} className="whitespace-pre-wrap">
-                      {String(part.payload.text ?? "")}
+                    <p key={index} className="italic text-zinc-600">
+                      [{part.type}]
                     </p>
                   );
-                }
-                return (
-                  <p key={index} className="italic text-zinc-500">
-                    [{part.type}]
-                  </p>
-                );
-              })}
+                })}
+              </div>
             </div>
           </div>
         </div>
-      ) : null}
+      )}
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-5 py-4" data-testid="thread-messages">
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-2 py-3" data-testid="thread-messages">
         {messages.length === 0 ? (
-          <p className="mt-6 text-center text-xs text-zinc-500">
+          <p className="mt-8 text-center text-xs text-zinc-500">
             No replies yet. Start the conversation.
           </p>
         ) : (
-          messages.map((message) => (
-            <MessageCard
-              key={message.id}
-              message={message}
-              actorsById={actorsById}
-              currentActorId={currentActorId}
-              threads={[]}
-              activeThreadId={null}
-              onCreateThread={() => {
-                // nested thread creation is intentionally disabled in v1
-              }}
-              onOpenThread={() => {
-                // no-op inside thread view
-              }}
-            />
-          ))
+          <div className="space-y-0.5">
+            {messages.map((message) => (
+              <MessageCard
+                key={message.id}
+                message={message}
+                actorsById={actorsById}
+                currentActorId={currentActorId}
+                threads={[]}
+                activeThreadId={null}
+                onCreateThread={() => {}}
+                onOpenThread={() => {}}
+              />
+            ))}
+          </div>
         )}
       </div>
 
-      <form className="space-y-3 border-t border-zinc-800/80 bg-zinc-950/80 p-4" onSubmit={sendMessage}>
+      {/* Composer */}
+      <form className="border-t border-zinc-800/60 bg-zinc-950/90 p-3" onSubmit={sendMessage}>
         <div className="relative">
-          <textarea
-            className="h-24 w-full rounded-xl border border-zinc-700/80 bg-zinc-900/80 p-3 text-sm leading-relaxed outline-none transition focus:border-emerald-500/70"
+          <Textarea
+            className="min-h-[64px] resize-none text-xs"
             value={input}
-            onChange={(event) => setInput(event.target.value)}
+            onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleComposerKeyDown}
-            placeholder="Reply in thread... (@mention, /command)"
+            placeholder="Reply in thread…"
             data-testid="thread-input"
           />
-          {mentionQuery !== null && mentionSuggestions.length > 0 ? (
-            <div className="absolute left-2 right-2 top-2 z-10 max-h-40 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
+          {mentionQuery !== null && mentionSuggestions.length > 0 && (
+            <div className="absolute bottom-full left-0 right-0 z-10 mb-1 max-h-40 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
               {mentionSuggestions.map((actor) => (
                 <button
                   key={actor.actorId}
                   type="button"
-                  className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-zinc-200 transition hover:bg-zinc-800"
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition hover:bg-zinc-800"
                   onClick={() => selectMention(actor.displayName)}
                 >
-                  <span>@{actor.displayName}</span>
-                  <span className="text-zinc-500">{actor.actorType}</span>
+                  <AtSign className="h-3 w-3 text-sky-400" />
+                  <span className="text-zinc-200">{actor.displayName}</span>
+                  <Badge variant="secondary" className="ml-auto">{actor.actorType}</Badge>
                 </button>
               ))}
             </div>
-          ) : null}
-          {commandQuery !== null && slashSuggestions.length > 0 ? (
-            <div className="absolute left-2 right-2 top-2 z-10 max-h-40 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
+          )}
+          {commandQuery !== null && slashSuggestions.length > 0 && (
+            <div className="absolute bottom-full left-0 right-0 z-10 mb-1 max-h-40 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
               {slashSuggestions.map((cmd) => (
                 <button
                   key={`${cmd.ownerActorId}:${cmd.name}`}
                   type="button"
-                  className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-zinc-200 transition hover:bg-zinc-800"
+                  className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition hover:bg-zinc-800"
                   onClick={() => selectCommand(cmd.name)}
                 >
-                  <span>/{cmd.name}</span>
-                  <span className="truncate pl-2 text-zinc-500">
+                  <Slash className="h-3 w-3 text-indigo-400" />
+                  <span className="text-zinc-200">{cmd.name}</span>
+                  <span className="ml-auto truncate text-[10px] text-zinc-500">
                     {cmd.description ?? cmd.ownerActorId.slice(0, 8)}
                   </span>
                 </button>
               ))}
             </div>
-          ) : null}
+          )}
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex cursor-pointer items-center rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800">
-            Attach file
+        <div className="mt-2 flex items-center gap-2">
+          <label className="inline-flex cursor-pointer items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:bg-zinc-800 hover:text-zinc-100">
+            <Paperclip className="h-3 w-3" />
+            Attach
             <input className="hidden" type="file" onChange={uploadAttachment} />
           </label>
-          <button
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-            type="submit"
-            data-testid="thread-send"
-          >
-            Send reply
-          </button>
-          <span className="text-xs text-zinc-500">Tip: @name and /poem</span>
+          <div className="flex-1" />
+          {pendingUpload.length > 0 && (
+            <span className="text-[10px] text-zinc-500">
+              {pendingUpload.length} file{pendingUpload.length > 1 ? "s" : ""}
+            </span>
+          )}
+          <Button type="submit" size="sm" data-testid="thread-send">
+            <Send className="mr-1 h-3 w-3" />
+            Reply
+          </Button>
         </div>
-        {pendingUpload.length > 0 ? (
-          <div className="text-xs text-zinc-400">
-            Pending attachments: {pendingUpload.map((file) => file.name).join(", ")}
-          </div>
-        ) : null}
-        {error ? <p className="text-xs text-red-400">{error}</p> : null}
+        {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
       </form>
     </aside>
   );

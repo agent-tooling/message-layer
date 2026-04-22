@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { MailCheck, Loader2 } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
+import { Button } from "@/components/ui/button";
 
 export function InviteAcceptPanel({ token }: { token: string }) {
   const { data: session } = authClient.useSession();
@@ -29,18 +31,38 @@ export function InviteAcceptPanel({ token }: { token: string }) {
   }
 
   return (
-    <div className="mx-auto mt-16 w-full max-w-lg rounded-2xl border border-zinc-800/80 bg-zinc-950/80 p-8 shadow-2xl shadow-black/40">
-      <h1 className="text-3xl font-semibold tracking-tight">Accept invitation</h1>
-      <p className="mt-2 text-sm text-zinc-400">Token: {token.slice(0, 12)}...</p>
-      {session ? (
-        <button className="mt-6 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500" type="button" onClick={accept}>
-          {status === "working" ? "Accepting..." : "Accept invite"}
-        </button>
-      ) : (
-        <p className="mt-4 text-sm text-zinc-300">Sign in on the home page first, then come back to this link.</p>
-      )}
-      {status === "accepted" ? <p className="mt-4 text-sm text-emerald-400">Invite accepted. You can now use the workspace.</p> : null}
-      {error ? <p className="mt-4 text-sm text-red-400">{error}</p> : null}
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="w-full max-w-sm rounded-xl border border-zinc-800/60 bg-zinc-900/30 p-6">
+        <div className="mb-4 flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
+          <MailCheck className="h-5 w-5 text-emerald-400" />
+        </div>
+        <h1 className="text-lg font-semibold tracking-tight text-zinc-100">
+          Accept invitation
+        </h1>
+        <p className="mt-1 text-xs text-zinc-500">
+          Token: {token.slice(0, 12)}…
+        </p>
+        {session ? (
+          <Button className="mt-5 w-full" onClick={accept} disabled={status === "working"}>
+            {status === "working" && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+            {status === "working" ? "Accepting…" : "Accept invite"}
+          </Button>
+        ) : (
+          <p className="mt-4 text-sm text-zinc-400">
+            Sign in on the home page first, then come back to this link.
+          </p>
+        )}
+        {status === "accepted" && (
+          <div className="mt-4 rounded-lg border border-emerald-500/20 bg-emerald-500/5 px-3 py-2 text-xs text-emerald-300">
+            Invite accepted. You can now use the workspace.
+          </div>
+        )}
+        {error && (
+          <div className="mt-4 rounded-lg border border-red-500/20 bg-red-500/5 px-3 py-2 text-xs text-red-400">
+            {error}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

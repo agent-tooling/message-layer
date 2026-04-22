@@ -1,5 +1,22 @@
 "use client";
 
+import {
+  MessageSquarePlus,
+  MessageSquare,
+  ChevronRight,
+  Paperclip,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Play,
+  Brain,
+  BookOpen,
+  Terminal,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Avatar } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { GenuiPartView } from "@/components/genui/genui-part-view";
 
 type MessagePart = { type: string; payload: Record<string, unknown> };
@@ -54,6 +71,14 @@ function formatThreadLabel(thread: ThreadRef, index: number): string {
   return `Thread ${index + 1} · ${suffix}`;
 }
 
+function formatTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return iso;
+  }
+}
+
 export function MessageCard({
   message,
   actorsById,
@@ -67,78 +92,80 @@ export function MessageCard({
   const contentParts = message.parts.filter((part) => part.type !== "tool_call" && part.type !== "tool_result");
   const toolParts = message.parts.filter((part) => part.type === "tool_call" || part.type === "tool_result");
 
-  const accent = sender.isAgent
-    ? "border-emerald-500/40 bg-emerald-500/[0.04]"
-    : sender.isYou
-      ? "border-sky-500/40 bg-sky-500/[0.04]"
-      : "border-zinc-800/80 bg-zinc-900/40";
-
   return (
-    <div className={`mb-4 rounded-xl border ${accent} p-4 shadow-sm shadow-black/20`}>
-      <div className="flex items-center justify-between text-xs text-zinc-500">
+    <div className="group flex gap-3 rounded-lg px-3 py-2.5 transition hover:bg-zinc-900/40">
+      <Avatar
+        name={sender.name}
+        type={sender.tag}
+        size="md"
+        className="mt-0.5"
+      />
+      <div className="min-w-0 flex-1">
+        {/* Header */}
         <div className="flex items-center gap-2">
-          <span
-            className={`h-2 w-2 rounded-full ${
-              sender.isAgent ? "bg-emerald-400" : sender.isYou ? "bg-sky-400" : "bg-zinc-500"
-            }`}
-          />
-          <span className="font-medium text-zinc-200">{sender.name}</span>
-          <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+          <span className="text-sm font-semibold text-zinc-100">{sender.name}</span>
+          <Badge
+            variant={sender.isAgent ? "emerald" : sender.tag === "app" ? "indigo" : "secondary"}
+          >
             {sender.tag}
-          </span>
-          <span className="text-zinc-600">seq {message.streamSeq}</span>
+          </Badge>
+          <span className="text-[11px] text-zinc-600">{formatTime(message.createdAt)}</span>
         </div>
-        <span>{new Date(message.createdAt).toLocaleTimeString()}</span>
-      </div>
 
-      <div className="mt-3 space-y-2">
-        {contentParts.map((part, index) => (
-          <MessagePartView key={index} part={part} />
-        ))}
-        {toolParts.length > 0 ? (
-          <details className="rounded-lg border border-zinc-800 bg-zinc-900/40 px-3 py-2 text-xs text-zinc-300">
-            <summary className="cursor-pointer list-none font-medium text-zinc-300">
-              Tool activity ({toolParts.length})
-            </summary>
-            <div className="mt-2 space-y-2">
-              {toolParts.map((part, index) => (
-                <MessagePartView key={`tool-${index}`} part={part} />
-              ))}
-            </div>
-          </details>
-        ) : null}
-      </div>
+        {/* Content */}
+        <div className="mt-1 space-y-1.5">
+          {contentParts.map((part, index) => (
+            <MessagePartView key={index} part={part} />
+          ))}
+          {toolParts.length > 0 && (
+            <details className="mt-1 rounded-lg border border-zinc-800/60 bg-zinc-900/30">
+              <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-xs font-medium text-zinc-400">
+                <Terminal className="h-3 w-3" />
+                Tool activity ({toolParts.length})
+              </summary>
+              <div className="space-y-1.5 border-t border-zinc-800/40 p-3">
+                {toolParts.map((part, index) => (
+                  <MessagePartView key={`tool-${index}`} part={part} />
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <button
-          className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800"
-          type="button"
-          onClick={() => onCreateThread(message.id)}
-          data-testid="create-thread"
-        >
-          {threads.length > 0 ? "New thread" : "Create thread"}
-        </button>
-        {threads.map((thread, index) => {
-          const active = thread.id === activeThreadId;
-          return (
-            <button
-              key={thread.id}
-              type="button"
-              onClick={() => onOpenThread(thread.id)}
-              data-testid="open-thread"
-              className={`rounded-full px-3 py-1 text-[11px] font-medium transition ${
-                active
-                  ? "bg-emerald-500/20 text-emerald-200 ring-1 ring-emerald-400/50"
-                  : "bg-zinc-800/80 text-zinc-300 hover:bg-zinc-700"
-              }`}
-            >
-              💬 {formatThreadLabel(thread, index)}
-            </button>
-          );
-        })}
-        {threads.length > 1 ? (
-          <span className="text-[11px] text-zinc-500">{threads.length} threads</span>
-        ) : null}
+        {/* Thread actions */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 text-[11px] text-zinc-500 opacity-0 transition group-hover:opacity-100"
+            onClick={() => onCreateThread(message.id)}
+            data-testid="create-thread"
+          >
+            <MessageSquarePlus className="mr-1 h-3 w-3" />
+            {threads.length > 0 ? "New thread" : "Reply in thread"}
+          </Button>
+          {threads.map((thread, index) => {
+            const active = thread.id === activeThreadId;
+            return (
+              <button
+                key={thread.id}
+                type="button"
+                onClick={() => onOpenThread(thread.id)}
+                data-testid="open-thread"
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition",
+                  active
+                    ? "bg-emerald-500/15 text-emerald-300 ring-1 ring-emerald-500/30"
+                    : "bg-zinc-800/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200",
+                )}
+              >
+                <MessageSquare className="h-3 w-3" />
+                {formatThreadLabel(thread, index)}
+                <ChevronRight className="h-3 w-3 opacity-50" />
+              </button>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -150,34 +177,35 @@ function MessagePartView({ part }: { part: MessagePart }) {
     const kind = typeof part.payload.kind === "string" ? part.payload.kind : null;
     if (kind === "thinking") {
       return (
-        <div className="rounded-lg border border-fuchsia-900/60 bg-fuchsia-950/30 px-3 py-2 text-xs text-fuchsia-100">
-          <div className="mb-1 font-semibold">Thinking</div>
-          <p className="whitespace-pre-wrap leading-relaxed text-fuchsia-100/90">{text}</p>
+        <div className="flex items-start gap-2 rounded-lg border border-fuchsia-900/40 bg-fuchsia-950/20 px-3 py-2 text-xs">
+          <Brain className="mt-0.5 h-3.5 w-3.5 shrink-0 text-fuchsia-400" />
+          <div>
+            <p className="mb-0.5 font-semibold text-fuchsia-300">Thinking</p>
+            <p className="whitespace-pre-wrap leading-relaxed text-fuchsia-100/80">{text}</p>
+          </div>
         </div>
       );
     }
     if (kind === "references") {
       return (
-        <div className="rounded-lg border border-sky-900/60 bg-sky-950/30 px-3 py-2 text-xs text-sky-100">
-          <div className="mb-1 font-semibold">References</div>
-          <p className="whitespace-pre-wrap leading-relaxed text-sky-100/90">{text}</p>
+        <div className="flex items-start gap-2 rounded-lg border border-sky-900/40 bg-sky-950/20 px-3 py-2 text-xs">
+          <BookOpen className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-400" />
+          <div>
+            <p className="mb-0.5 font-semibold text-sky-300">References</p>
+            <p className="whitespace-pre-wrap leading-relaxed text-sky-100/80">{text}</p>
+          </div>
         </div>
       );
     }
-    return <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-100">{text}</p>;
+    return <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-200">{text}</p>;
   }
 
   if (part.type === "mention") {
     const label = String(part.payload.label ?? "@mention");
-    const actorId =
-      typeof part.payload.actorId === "string" ? part.payload.actorId : "";
     return (
-      <div className="inline-flex w-fit items-center gap-2 rounded-full border border-sky-700/60 bg-sky-900/30 px-3 py-1 text-xs text-sky-200">
-        <span>{label}</span>
-        {actorId ? (
-          <span className="text-sky-200/60">{actorId.slice(0, 8)}</span>
-        ) : null}
-      </div>
+      <span className="inline-flex items-center gap-1 rounded-md bg-sky-500/10 px-2 py-0.5 text-xs font-medium text-sky-300">
+        @{label}
+      </span>
     );
   }
 
@@ -185,9 +213,9 @@ function MessagePartView({ part }: { part: MessagePart }) {
     const command = String(part.payload.command ?? "command");
     const args = part.payload.args ?? {};
     return (
-      <div className="rounded-lg border border-indigo-800/70 bg-indigo-950/40 px-3 py-2 text-xs text-indigo-200">
-        <div className="font-semibold">/{command}</div>
-        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px] text-indigo-100/80">
+      <div className="rounded-lg border border-indigo-800/40 bg-indigo-950/20 px-3 py-2 text-xs">
+        <p className="font-semibold text-indigo-300">/{command}</p>
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px] text-indigo-200/70">
           {JSON.stringify(args, null, 2)}
         </pre>
       </div>
@@ -197,9 +225,12 @@ function MessagePartView({ part }: { part: MessagePart }) {
   if (part.type === "tool_call") {
     const toolName = String(part.payload.toolName ?? part.payload.name ?? "tool");
     return (
-      <div className="rounded-lg border border-yellow-900/80 bg-yellow-950/40 px-3 py-2 text-xs text-yellow-200">
-        <div className="font-semibold">▶ {toolName}</div>
-        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px] text-yellow-100/80">
+      <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 px-3 py-2 text-xs">
+        <div className="flex items-center gap-1.5 font-semibold text-amber-300">
+          <Play className="h-3 w-3" />
+          {toolName}
+        </div>
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px] text-amber-200/70">
           {JSON.stringify(part.payload.args ?? part.payload.input ?? {}, null, 2)}
         </pre>
       </div>
@@ -214,36 +245,42 @@ function MessagePartView({ part }: { part: MessagePart }) {
       : [];
     return (
       <div
-        className={`rounded-lg border px-3 py-2 text-xs ${
+        className={cn(
+          "rounded-lg border px-3 py-2 text-xs",
           isError
-            ? "border-red-900/60 bg-red-950/40 text-red-200"
-            : "border-zinc-800 bg-zinc-900/70 text-zinc-300"
-        }`}
+            ? "border-red-800/40 bg-red-950/20 text-red-200"
+            : "border-zinc-800/40 bg-zinc-900/30 text-zinc-300",
+        )}
       >
-        <div className={`font-semibold ${isError ? "text-red-300" : "text-zinc-300"}`}>
-          {isError ? "✗" : "✓"} {String(part.payload.toolName ?? "result")}
+        <div className="flex items-center gap-1.5 font-semibold">
+          {isError ? (
+            <XCircle className="h-3 w-3 text-red-400" />
+          ) : (
+            <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+          )}
+          {String(part.payload.toolName ?? "result")}
         </div>
         <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px]">{content}</pre>
-        {references.length > 0 ? (
-          <div className="mt-2 space-y-1">
-            <div className="text-[10px] uppercase tracking-wide text-zinc-400">References</div>
+        {references.length > 0 && (
+          <div className="mt-2 space-y-0.5 border-t border-zinc-800/40 pt-1.5">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">References</p>
             {references.map((ref, index) => (
-              <div key={`${ref}-${index}`} className="text-[11px] text-zinc-300">
-                {ref}
-              </div>
+              <p key={`${ref}-${index}`} className="text-[11px] text-zinc-400">{ref}</p>
             ))}
           </div>
-        ) : null}
+        )}
       </div>
     );
   }
 
   if (part.type === "approval_request") {
     return (
-      <div className="rounded-lg border border-amber-700/60 bg-amber-900/30 px-3 py-2 text-xs text-amber-100">
-        <div className="font-semibold">⚠ Approval requested</div>
-        <div className="mt-1 text-amber-100/90">tool: {String(part.payload.toolName ?? "unknown")}</div>
-        <div className="text-amber-100/60">id: {String(part.payload.requestId ?? "")}</div>
+      <div className="flex items-start gap-2 rounded-lg border border-amber-700/40 bg-amber-900/15 px-3 py-2 text-xs text-amber-200">
+        <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+        <div>
+          <p className="font-semibold">Approval requested</p>
+          <p className="mt-0.5 text-amber-200/70">tool: {String(part.payload.toolName ?? "unknown")}</p>
+        </div>
       </div>
     );
   }
@@ -252,14 +289,20 @@ function MessagePartView({ part }: { part: MessagePart }) {
     const approved = Boolean(part.payload.approved);
     return (
       <div
-        className={`rounded-lg border px-3 py-2 text-xs ${
+        className={cn(
+          "flex items-center gap-2 rounded-lg border px-3 py-2 text-xs",
           approved
-            ? "border-emerald-700/60 bg-emerald-900/30 text-emerald-200"
-            : "border-red-800/60 bg-red-900/30 text-red-200"
-        }`}
+            ? "border-emerald-700/40 bg-emerald-900/15 text-emerald-200"
+            : "border-red-800/40 bg-red-900/15 text-red-200",
+        )}
       >
-        {approved ? "✓ Approved" : "✗ Denied"}
-        <span className="ml-2 text-zinc-400">id: {String(part.payload.requestId ?? "")}</span>
+        {approved ? (
+          <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+        ) : (
+          <XCircle className="h-3.5 w-3.5 text-red-400" />
+        )}
+        {approved ? "Approved" : "Denied"}
+        <span className="ml-1 text-zinc-500">id: {String(part.payload.requestId ?? "")}</span>
       </div>
     );
   }
@@ -272,27 +315,25 @@ function MessagePartView({ part }: { part: MessagePart }) {
     const name = String(part.payload.name ?? "artifact");
     const url = typeof part.payload.url === "string" ? part.payload.url : null;
     return (
-      <div className="rounded-lg border border-zinc-700 bg-zinc-900/60 px-3 py-2 text-xs text-zinc-300">
-        <div className="flex items-center gap-2">
-          <span>📎</span>
-          {url ? (
-            <a className="text-sky-300 underline underline-offset-2" href={url} target="_blank" rel="noreferrer">
-              {name}
-            </a>
-          ) : (
-            <span>{name}</span>
-          )}
-        </div>
-        {typeof part.payload.mimeType === "string" ? (
-          <div className="mt-1 text-zinc-500">{String(part.payload.mimeType)}</div>
-        ) : null}
+      <div className="inline-flex items-center gap-2 rounded-lg border border-zinc-700/60 bg-zinc-900/40 px-3 py-2 text-xs text-zinc-300">
+        <Paperclip className="h-3.5 w-3.5 text-zinc-500" />
+        {url ? (
+          <a className="font-medium text-sky-300 underline underline-offset-2" href={url} target="_blank" rel="noreferrer">
+            {name}
+          </a>
+        ) : (
+          <span className="font-medium">{name}</span>
+        )}
+        {typeof part.payload.mimeType === "string" && (
+          <Badge variant="secondary">{String(part.payload.mimeType)}</Badge>
+        )}
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-xs text-zinc-400">
-      <div className="font-semibold text-zinc-300">{part.type}</div>
+    <div className="rounded-lg border border-zinc-800/40 bg-zinc-900/30 px-3 py-2 text-xs text-zinc-400">
+      <p className="font-semibold text-zinc-300">{part.type}</p>
       <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px]">{JSON.stringify(part.payload, null, 2)}</pre>
     </div>
   );

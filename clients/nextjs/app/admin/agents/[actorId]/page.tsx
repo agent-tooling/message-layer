@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronLeft, RefreshCw, ShieldBan } from "lucide-react";
 import { ActivityTimeline, type AuditRow } from "@/components/activity-timeline";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Avatar } from "@/components/ui/avatar";
+import { cn } from "@/lib/utils";
 
 type Actor = { actorId: string; displayName: string; actorType: string; createdAt: string };
 type Channel = { id: string; name: string; visibility: string };
@@ -70,7 +75,7 @@ export default function AgentActivityPage() {
   async function kick() {
     if (!actor) return;
     const confirmed = window.confirm(
-      `Revoke every live grant held by ${actor.displayName}?\n\nThis emits one grant.revoked audit event per affected grant. The agent will be denied on its next action.`,
+      `Revoke every live grant held by ${actor.displayName}?`,
     );
     if (!confirmed) return;
     setKickPending(true);
@@ -88,7 +93,7 @@ export default function AgentActivityPage() {
         type: "ok",
         message:
           count === 0
-            ? `${actor.displayName} had no live grants — nothing to revoke.`
+            ? `No live grants to revoke.`
             : `Revoked ${count} grant${count === 1 ? "" : "s"}.`,
       });
       await refresh();
@@ -100,84 +105,96 @@ export default function AgentActivityPage() {
   }
 
   return (
-    <section className="mx-auto max-w-5xl space-y-4">
+    <section className="mx-auto max-w-5xl space-y-5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <Link href="/admin/agents" className="text-xs text-zinc-500 hover:text-zinc-300">
-            ← All agents
-          </Link>
-          <h2 className="mt-2 text-lg font-semibold tracking-tight">
-            {actor ? actor.displayName : actorId.slice(0, 16) + "…"}
-          </h2>
-          <p className="mt-1 text-xs text-zinc-500">
-            <span className="font-mono">{actorId}</span>
-            {actor ? ` · ${actor.actorType} · created ${new Date(actor.createdAt).toISOString().slice(0, 19)}Z` : ""}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            className="rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
+          <Link
+            href="/admin/agents"
+            className="inline-flex items-center gap-1 text-xs text-zinc-500 transition hover:text-zinc-300"
           >
+            <ChevronLeft className="h-3.5 w-3.5" />
+            All agents
+          </Link>
+          <div className="mt-3 flex items-center gap-3">
+            {actor && (
+              <Avatar name={actor.displayName} type={actor.actorType} size="lg" />
+            )}
+            <div>
+              <h2 className="text-lg font-semibold tracking-tight">
+                {actor ? actor.displayName : actorId.slice(0, 16) + "…"}
+              </h2>
+              <div className="mt-0.5 flex items-center gap-2 text-xs text-zinc-500">
+                {actor && <Badge variant="indigo">{actor.actorType}</Badge>}
+                <span className="font-mono">{actorId.slice(0, 16)}…</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-1.5">
+          <Button variant="outline" size="sm" onClick={() => void refresh()}>
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
             Refresh
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
             disabled={kickPending || !actor || actor.actorType !== "agent"}
             onClick={() => void kick()}
-            className="rounded-md border border-red-700/80 bg-red-700/20 px-3 py-1.5 text-xs font-medium text-red-100 transition hover:bg-red-700/40 disabled:opacity-40"
             title={
               !actor
                 ? "loading…"
                 : actor.actorType !== "agent"
                   ? "Only agents can be kicked"
-                  : "Revoke all live grants for this agent"
+                  : "Revoke all live grants"
             }
           >
+            <ShieldBan className="mr-1.5 h-3.5 w-3.5" />
             {kickPending ? "Kicking…" : "Kick agent"}
-          </button>
+          </Button>
         </div>
       </div>
 
-      {toast ? (
+      {toast && (
         <div
-          className={`rounded-lg border px-3 py-2 text-xs ${
+          className={cn(
+            "rounded-lg border px-3 py-2 text-xs",
             toast.type === "ok"
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
-              : "border-red-500/40 bg-red-500/10 text-red-200"
-          }`}
+              ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-300"
+              : "border-red-500/30 bg-red-500/5 text-red-300",
+          )}
         >
           {toast.message}
         </div>
-      ) : null}
+      )}
 
-      {error ? (
-        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+      {error && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-300">
           {error}
         </div>
-      ) : null}
+      )}
 
-      {stats.length > 0 ? (
+      {stats.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-3 md:grid-cols-5">
           {stats.slice(0, 5).map(([type, count]) => (
             <div
               key={type}
-              className="rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-3 py-2 text-xs"
+              className="rounded-xl border border-zinc-800/60 bg-zinc-900/20 px-3 py-2.5"
             >
-              <p className="text-[10px] uppercase tracking-wide text-zinc-500">{type}</p>
-              <p className="mt-1 text-xl font-semibold text-zinc-100 tabular-nums">{count}</p>
+              <p className="text-[10px] font-medium uppercase tracking-wider text-zinc-500">{type}</p>
+              <p className="mt-1 text-xl font-semibold tabular-nums text-zinc-100">{count}</p>
             </div>
           ))}
         </div>
-      ) : null}
+      )}
 
       <div>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">Activity</h3>
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+          Activity
+        </h3>
         {loading && rows.length === 0 ? (
-          <p className="rounded-xl border border-zinc-800/80 bg-zinc-900/40 px-4 py-3 text-xs text-zinc-500">
+          <div className="rounded-xl border border-zinc-800/60 bg-zinc-900/20 px-4 py-8 text-center text-sm text-zinc-500">
             Loading audit log…
-          </p>
+          </div>
         ) : (
           <ActivityTimeline
             rows={rows}

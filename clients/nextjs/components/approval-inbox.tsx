@@ -1,6 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import {
+  ShieldAlert,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  Timer,
+  CalendarDays,
+  Infinity as InfinityIcon,
+  Settings2,
+  XCircle,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Avatar } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export type PermissionRequest = {
   requestId: string;
@@ -27,21 +43,29 @@ type Props = {
   onResolve: (requestId: string, approve: boolean, options: ResolveApprovalOptions) => Promise<void>;
 };
 
-const APPROVAL_MODES: Array<{ id: string; label: string; resolve: () => ResolveApprovalOptions; help: string }> = [
-  { id: "once", label: "Once", resolve: () => ({ maxUses: 1 }), help: "Agent may perform exactly this action one time." },
+const APPROVAL_MODES: Array<{
+  id: string;
+  label: string;
+  icon: typeof Clock;
+  resolve: () => ResolveApprovalOptions;
+  help: string;
+}> = [
+  { id: "once", label: "Once", icon: Timer, resolve: () => ({ maxUses: 1 }), help: "One-time use" },
   {
     id: "1h",
     label: "1 hour",
+    icon: Clock,
     resolve: () => ({ expiresAt: isoOffset(60 * 60 * 1000) }),
-    help: "Grant expires one hour from now.",
+    help: "Expires in 1 hour",
   },
   {
     id: "1d",
     label: "1 day",
+    icon: CalendarDays,
     resolve: () => ({ expiresAt: isoOffset(24 * 60 * 60 * 1000) }),
-    help: "Grant expires 24 hours from now.",
+    help: "Expires in 24 hours",
   },
-  { id: "forever", label: "Forever", resolve: () => ({}), help: "No expiry, unlimited uses. Revoke manually later." },
+  { id: "forever", label: "Forever", icon: InfinityIcon, resolve: () => ({}), help: "No expiry" },
 ];
 
 function isoOffset(ms: number): string {
@@ -75,16 +99,14 @@ export function ApprovalInbox({ approvals, actorsById, channelsById, onResolve }
   }
 
   return (
-    <div className="border-b border-amber-500/10 bg-amber-500/[0.03] px-6 py-4">
-      <div className="mb-3 flex items-center justify-between">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-300">
-          Agent approval requests ({approvals.length})
-        </p>
-        <p className="text-[11px] text-zinc-500">
-          Read the intent below before deciding. Once-only approvals burn after a single use.
+    <div className="border-b border-amber-500/10 bg-amber-500/[0.02] px-5 py-3">
+      <div className="mb-2 flex items-center gap-2">
+        <ShieldAlert className="h-4 w-4 text-amber-400" />
+        <p className="text-xs font-semibold text-amber-300">
+          Agent approvals ({approvals.length})
         </p>
       </div>
-      <ul className="space-y-2">
+      <div className="space-y-1.5">
         {approvals.map((request) => {
           const actor = actorsById[request.actorId];
           const isOpen = expanded[request.requestId] ?? false;
@@ -94,107 +116,118 @@ export function ApprovalInbox({ approvals, actorsById, channelsById, onResolve }
             request.resourceType === "channel" && request.resourceId ? channelsById[request.resourceId] : undefined;
 
           return (
-            <li
+            <div
               key={request.requestId}
-              className="overflow-hidden rounded-xl border border-amber-500/20 bg-zinc-950/60"
+              className="rounded-lg border border-amber-500/15 bg-zinc-950/60"
             >
               <button
                 type="button"
-                className="flex w-full items-start gap-3 px-4 py-3 text-left transition hover:bg-amber-500/[0.05]"
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition hover:bg-amber-500/[0.03]"
                 onClick={() => setExpanded((prev) => ({ ...prev, [request.requestId]: !prev[request.requestId] }))}
               >
-                <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-xs font-semibold text-amber-200">
-                  {actor?.actorType === "agent" ? "AI" : actor?.actorType === "app" ? "APP" : "U"}
-                </span>
+                <Avatar
+                  name={actor?.displayName ?? request.actorId.slice(0, 8)}
+                  type={actor?.actorType ?? "agent"}
+                  size="sm"
+                />
                 <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
                     <span className="font-semibold text-zinc-100">
                       {actor?.displayName ?? request.actorId.slice(0, 10)}
                     </span>
                     <span className="text-zinc-500">wants</span>
-                    <code className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-200">
-                      {request.action}
-                    </code>
+                    <Badge variant="amber">{request.action}</Badge>
                     <span className="text-zinc-500">on</span>
-                    <span className="text-xs text-zinc-300">
+                    <span className="text-zinc-300">
                       {request.resourceType}
                       {channel ? ` #${channel.name}` : request.resourceId ? ` ${request.resourceId.slice(0, 10)}…` : ""}
                     </span>
                   </div>
                   <RequestPreview context={request.context} />
                 </div>
-                <span className="mt-1 text-xs text-zinc-500">{isOpen ? "▲" : "▼"}</span>
+                {isOpen ? (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-zinc-600" />
+                )}
               </button>
 
-              {isOpen ? (
-                <div className="border-t border-amber-500/10 bg-zinc-950/80 px-4 py-3">
+              {isOpen && (
+                <div className="border-t border-amber-500/10 bg-zinc-950/60 px-3 py-3">
                   <ContextDetails context={request.context} channelsById={channelsById} />
 
-                  <div className="mt-4 space-y-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                  <div className="mt-3">
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
                       Approve with…
                     </p>
-                    <div className="flex flex-wrap gap-2">
-                      {APPROVAL_MODES.map((mode) => (
-                        <button
-                          key={mode.id}
-                          type="button"
-                          disabled={Boolean(isPending)}
-                          title={mode.help}
-                          onClick={() => resolve(request.requestId, true, mode.resolve(), mode.id)}
-                          className={modeButton(isPending === mode.id)}
-                        >
-                          {isPending === mode.id ? "…" : mode.label}
-                        </button>
-                      ))}
-                      <button
-                        type="button"
+                    <div className="flex flex-wrap gap-1.5">
+                      {APPROVAL_MODES.map((mode) => {
+                        const Icon = mode.icon;
+                        return (
+                          <Button
+                            key={mode.id}
+                            variant="outline"
+                            size="sm"
+                            disabled={Boolean(isPending)}
+                            title={mode.help}
+                            onClick={() => resolve(request.requestId, true, mode.resolve(), mode.id)}
+                            className="gap-1"
+                          >
+                            <Icon className="h-3 w-3" />
+                            {isPending === mode.id ? "…" : mode.label}
+                          </Button>
+                        );
+                      })}
+                      <Button
+                        variant={customShown ? "secondary" : "ghost"}
+                        size="sm"
                         onClick={() =>
                           setCustomOpen((prev) => ({ ...prev, [request.requestId]: !prev[request.requestId] }))
                         }
-                        className={modeButton(false, customShown)}
+                        className="gap-1"
                       >
-                        Custom…
-                      </button>
+                        <Settings2 className="h-3 w-3" />
+                        Custom
+                      </Button>
                     </div>
 
-                    {customShown ? (
-                      <div className="mt-2 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
+                    {customShown && (
+                      <div className="mt-2 rounded-lg border border-zinc-800/60 bg-zinc-900/30 p-3">
                         <div className="grid gap-3 sm:grid-cols-2">
                           <label className="flex flex-col gap-1 text-[11px] text-zinc-400">
-                            <span>Max uses (optional)</span>
-                            <input
+                            <span className="font-medium">Max uses</span>
+                            <Input
                               type="number"
                               min={1}
                               placeholder="e.g. 3"
                               value={customMaxUses[request.requestId] ?? ""}
-                              onChange={(event) =>
+                              onChange={(e) =>
                                 setCustomMaxUses((prev) => ({
                                   ...prev,
-                                  [request.requestId]: event.target.value,
+                                  [request.requestId]: e.target.value,
                                 }))
                               }
-                              className={inputCls}
+                              className="h-8 text-xs"
                             />
                           </label>
                           <label className="flex flex-col gap-1 text-[11px] text-zinc-400">
-                            <span>Expires at (optional)</span>
-                            <input
+                            <span className="font-medium">Expires at</span>
+                            <Input
                               type="datetime-local"
                               value={customExpiresAt[request.requestId] ?? ""}
-                              onChange={(event) =>
+                              onChange={(e) =>
                                 setCustomExpiresAt((prev) => ({
                                   ...prev,
-                                  [request.requestId]: event.target.value,
+                                  [request.requestId]: e.target.value,
                                 }))
                               }
-                              className={inputCls}
+                              className="h-8 text-xs"
                             />
                           </label>
                         </div>
                         <div className="mt-3 flex justify-end">
-                          <button
-                            type="button"
+                          <Button
+                            size="sm"
                             disabled={Boolean(isPending)}
                             onClick={() => {
                               const max = customMaxUses[request.requestId];
@@ -204,36 +237,35 @@ export function ApprovalInbox({ approvals, actorsById, channelsById, onResolve }
                                 options.maxUses = Number(max);
                               }
                               if (exp) {
-                                // <datetime-local> returns wall-clock time without TZ; convert to ISO.
                                 options.expiresAt = new Date(exp).toISOString();
                               }
                               if (!options.maxUses && !options.expiresAt) return;
                               void resolve(request.requestId, true, options, "custom");
                             }}
-                            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
                           >
                             Approve with custom terms
-                          </button>
+                          </Button>
                         </div>
                       </div>
-                    ) : null}
+                    )}
                   </div>
 
-                  <div className="mt-4 flex items-end gap-2 border-t border-zinc-800/80 pt-3">
+                  <div className="mt-3 flex items-end gap-2 border-t border-zinc-800/40 pt-3">
                     <label className="min-w-0 flex-1 text-[11px] text-zinc-400">
-                      <span className="block">Deny reason (optional)</span>
-                      <input
+                      <span className="mb-1 block font-medium">Deny reason</span>
+                      <Input
                         type="text"
                         placeholder="e.g. blocked by policy"
                         value={denyReason[request.requestId] ?? ""}
-                        onChange={(event) =>
-                          setDenyReason((prev) => ({ ...prev, [request.requestId]: event.target.value }))
+                        onChange={(e) =>
+                          setDenyReason((prev) => ({ ...prev, [request.requestId]: e.target.value }))
                         }
-                        className={inputCls}
+                        className="h-8 text-xs"
                       />
                     </label>
-                    <button
-                      type="button"
+                    <Button
+                      variant="destructive"
+                      size="sm"
                       disabled={Boolean(isPending)}
                       onClick={() =>
                         resolve(
@@ -243,17 +275,17 @@ export function ApprovalInbox({ approvals, actorsById, channelsById, onResolve }
                           "deny",
                         )
                       }
-                      className="rounded-md border border-red-700/80 bg-red-700/20 px-3 py-1.5 text-xs font-semibold text-red-100 transition hover:bg-red-700/40 disabled:opacity-50"
                     >
+                      <XCircle className="mr-1 h-3 w-3" />
                       {isPending === "deny" ? "…" : "Deny"}
-                    </button>
+                    </Button>
                   </div>
                 </div>
-              ) : null}
-            </li>
+              )}
+            </div>
           );
         })}
-      </ul>
+      </div>
     </div>
   );
 }
@@ -261,7 +293,7 @@ export function ApprovalInbox({ approvals, actorsById, channelsById, onResolve }
 function RequestPreview({ context }: { context: Record<string, unknown> }) {
   const preview = describePreview(context);
   if (!preview) return null;
-  return <p className="mt-1 truncate text-[11px] text-zinc-400">{preview}</p>;
+  return <p className="mt-0.5 truncate text-[11px] text-zinc-500">{preview}</p>;
 }
 
 function describePreview(context: Record<string, unknown>): string | null {
@@ -271,7 +303,7 @@ function describePreview(context: Record<string, unknown>): string | null {
     const firstText = parts.find((p) => (p as { type?: unknown })?.type === "text") as
       | { text?: string }
       | undefined;
-    if (firstText?.text) return `“${firstText.text}”`;
+    if (firstText?.text) return `"${firstText.text}"`;
     const names = parts
       .map((p) => (p as { type?: unknown })?.type)
       .filter((t): t is string => typeof t === "string");
@@ -298,7 +330,7 @@ function ContextDetails({
     const streamId = context.streamId as string | undefined;
     const parts = Array.isArray(context.parts) ? (context.parts as Array<Record<string, unknown>>) : [];
     return (
-      <div className="space-y-2 text-[12px] text-zinc-300">
+      <div className="space-y-2 text-xs text-zinc-300">
         <Kv label="Intent" value="message.append" />
         <Kv
           label="Stream"
@@ -310,23 +342,23 @@ function ContextDetails({
         />
         <Kv label="Idempotency" value={String(context.idempotencyKey ?? "—")} />
         <div>
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
             Parts ({parts.length})
           </p>
-          <ul className="space-y-1">
+          <div className="space-y-1">
             {parts.map((part, i) => (
-              <li key={i} className="rounded border border-zinc-800 bg-zinc-900/40 p-2 text-[11px]">
-                <span className="mr-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-300">
+              <div key={i} className="rounded border border-zinc-800/40 bg-zinc-900/30 px-2 py-1.5 text-[11px]">
+                <Badge variant="secondary" className="mr-2">
                   #{i} {String(part.type ?? "?")}
-                </span>
+                </Badge>
                 {typeof part.text === "string" ? (
-                  <span className="whitespace-pre-wrap text-zinc-200">“{part.text}”</span>
+                  <span className="text-zinc-200">"{part.text}"</span>
                 ) : Array.isArray(part.keys) ? (
-                  <span className="text-zinc-400">keys: {(part.keys as string[]).join(", ")}</span>
+                  <span className="text-zinc-500">keys: {(part.keys as string[]).join(", ")}</span>
                 ) : null}
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       </div>
     );
@@ -334,7 +366,7 @@ function ContextDetails({
 
   if (kind === "channel.create") {
     return (
-      <div className="space-y-2 text-[12px] text-zinc-300">
+      <div className="space-y-1.5 text-xs text-zinc-300">
         <Kv label="Intent" value="channel.create" />
         <Kv label="Name" value={String(context.name ?? "—")} />
         <Kv label="Visibility" value={String(context.visibility ?? "—")} />
@@ -342,9 +374,8 @@ function ContextDetails({
     );
   }
 
-  // Fallback — render the raw JSON so nothing is silently hidden.
   return (
-    <pre className="overflow-x-auto rounded bg-zinc-900/80 p-2 text-[11px] text-zinc-300">
+    <pre className="overflow-x-auto rounded-lg bg-zinc-900/30 p-2 text-[11px] text-zinc-400">
       {JSON.stringify(context, null, 2)}
     </pre>
   );
@@ -353,21 +384,8 @@ function ContextDetails({
 function Kv({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex gap-2">
-      <span className="w-24 shrink-0 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">{label}</span>
-      <span className="break-all text-[12px] text-zinc-200">{value}</span>
+      <span className="w-20 shrink-0 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">{label}</span>
+      <span className="break-all text-xs text-zinc-300">{value}</span>
     </div>
   );
-}
-
-const inputCls =
-  "rounded border border-zinc-700 bg-zinc-900/80 px-2 py-1 text-[12px] text-zinc-100 outline-none transition focus:border-emerald-500/60";
-
-function modeButton(isPending: boolean, isToggled = false): string {
-  if (isPending) {
-    return "rounded-md bg-emerald-600/80 px-3 py-1.5 text-xs font-semibold text-white opacity-70";
-  }
-  if (isToggled) {
-    return "rounded-md border border-emerald-600/80 bg-emerald-600/20 px-3 py-1.5 text-xs font-semibold text-emerald-200";
-  }
-  return "rounded-md border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition hover:border-emerald-600/70 hover:text-emerald-200";
 }

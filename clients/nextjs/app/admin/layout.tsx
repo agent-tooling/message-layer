@@ -3,83 +3,66 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
+import { Bot, Activity, ChevronLeft, LayoutDashboard } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { authClient } from "@/lib/auth-client";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
 
 const NAV = [
-  { href: "/admin", label: "Overview" },
-  { href: "/admin/agents", label: "Agents" },
-  { href: "/admin/activity", label: "Activity" },
+  { href: "/admin", label: "Overview", icon: LayoutDashboard },
+  { href: "/admin/agents", label: "Agents", icon: Bot },
+  { href: "/admin/activity", label: "Activity", icon: Activity },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { data: session, isPending } = authClient.useSession();
 
-  if (isPending) return <div className="p-8 text-sm text-zinc-300">Loading…</div>;
+  if (isPending) return <div className="p-8 text-sm text-zinc-400">Loading…</div>;
   if (!session) {
     return (
-      <div className="p-8 text-sm text-zinc-300">
-        Sign in at <Link href="/" className="underline">/</Link> before opening admin pages.
+      <div className="flex min-h-screen items-center justify-center text-sm text-zinc-400">
+        Sign in at <Link href="/" className="ml-1 text-emerald-400 underline">/</Link> before opening admin pages.
       </div>
     );
   }
 
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
-      <header className="border-b border-zinc-800/80 bg-zinc-950/80 px-6 py-4">
+      {/* Header */}
+      <header className="border-b border-zinc-800/60 bg-zinc-950/80 px-6 py-3">
         <div className="flex items-center justify-between">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Workspace admin</p>
-            <h1 className="mt-1 text-xl font-semibold tracking-tight">Control plane</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <details className="group relative">
-              <summary className="list-none cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800">
-                Admin pages ▾
-              </summary>
-              <div className="absolute right-0 z-20 mt-2 min-w-48 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-lg shadow-black/50">
-                {NAV.map((item) => {
-                  const active =
-                    item.href === "/admin"
-                      ? pathname === "/admin"
-                      : pathname?.startsWith(item.href);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={`block rounded-md px-3 py-2 text-xs transition ${
-                        active
-                          ? "bg-emerald-500/20 text-emerald-200"
-                          : "text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100"
-                      }`}
-                    >
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
-            </details>
+          <div className="flex items-center gap-3">
             <Link
               href="/"
-              className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
+              className="flex items-center gap-1 text-xs text-zinc-500 transition hover:text-zinc-300"
             >
-              ← Back to workspace
+              <ChevronLeft className="h-3.5 w-3.5" />
+              Workspace
             </Link>
+            <Separator orientation="vertical" className="h-4" />
+            <div>
+              <h1 className="text-sm font-semibold tracking-tight">Admin</h1>
+            </div>
           </div>
         </div>
-        <nav className="mt-4 flex gap-2 text-xs">
+        <nav className="mt-3 flex gap-1">
           {NAV.filter((item) => item.href !== "/admin").map((item) => {
             const active = pathname?.startsWith(item.href);
+            const Icon = item.icon;
             return (
               <Link
                 key={item.href}
                 href={item.href}
-                className={`rounded-md px-3 py-1.5 transition ${
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition",
                   active
-                    ? "bg-emerald-500/20 text-emerald-200"
-                    : "border border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-700 hover:text-zinc-100"
-                }`}
+                    ? "bg-emerald-500/10 text-emerald-300"
+                    : "text-zinc-400 hover:bg-zinc-800/60 hover:text-zinc-200",
+                )}
               >
+                <Icon className="h-3.5 w-3.5" />
                 {item.label}
               </Link>
             );
