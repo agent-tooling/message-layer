@@ -31,7 +31,10 @@ driving external runtimes.
 | `thread.created`               | stream     | A thread (stream) was created.                         |
 | `message.appended`             | stream     | A new message landed on a stream.                      |
 | `mention.recorded`             | stream     | A mention part targeted an actor in the same org.      |
-| `command.invoked`              | stream     | A command part invocation was appended to a stream.    |
+| `command.invoked`              | stream     | A command part invocation was appended to a stream. Payload includes `commandId` and `ownerActorId` when the command is registered; both are `null` for unregistered commands. |
+| `command.registration_requested` | org    | An actor requested a slash command registration; opens a `command:register` permission request. |
+| `command.registered`           | org        | An admin approved a command registration; the command is now active. |
+| `command.deleted`              | org        | A registered command was disabled by its owner or an admin. |
 | `message.redacted`             | stream     | A message was redacted; content is no longer readable. |
 | `membership.updated`           | org        | An actor's membership changed.                         |
 | `cursor.updated`               | stream     | An actor's read cursor moved.                          |

@@ -19,7 +19,7 @@ A headless messaging and coordination layer for humans, agents, and apps.
 npm install message-layer
 ```
 
-### Quickest start (in-process, PGlite)
+### In-process (PGlite)
 
 ```typescript
 import { startServer } from "message-layer";
@@ -31,7 +31,7 @@ const server = await startServer({
 // HTTP + WebSocket on http://localhost:3000
 ```
 
-### With typed plugin imports (recommended)
+### With explicit storage and plugins
 
 ```typescript
 import { startServer } from "message-layer";
@@ -43,7 +43,7 @@ import { websocketPlugin } from "message-layer/plugins/websocket";
 
 const server = await startServer({
   port: 4000,
-  config: { storage: pglite("./.data/db"), websocket: false },
+  config: { storage: pglite("./.data/db") },
   plugins: [
     requestLoggingPlugin(),
     apiKeyAuthPlugin({ strict: true }),
@@ -137,7 +137,6 @@ new MessageLayerClient({ ..., apiKey: "...", apiKeyHeader: "x-ml-secret" })
 | `ARTIFACTS_S3_ACCESS_KEY_ID` | _(AWS credential chain)_ | Static access key ID |
 | `ARTIFACTS_S3_SECRET_ACCESS_KEY` | _(AWS credential chain)_ | Static secret access key |
 | `PLUGINS` | _(none)_ | Comma-separated plugin names, e.g. `request-logging,webhooks` |
-| `ENABLE_WEBSOCKET` | `true` | Enable WebSocket upgrade |
 | `MESSAGE_LAYER_API_KEY` | _(none)_ | Shared secret for `api-key-header-auth` plugin |
 | `MESSAGE_LAYER_CONFIG` | _(none)_ | Full config as JSON string (overrides individual env vars) |
 
@@ -231,9 +230,9 @@ const s2 = postgres(process.env.DB_URL!); // { adapter: "postgres", path: "<url>
 
 Plugins extend message-layer with additional routes, event handlers, and schema migrations. They are registered at startup via config.
 
-### Configuring plugins
+### Plugin system
 
-Each plugin is a standalone subpath import with a typed factory function:
+Each plugin is a standalone subpath import:
 
 ```typescript
 import { requestLoggingPlugin } from "message-layer/plugins/request-logging";
@@ -244,7 +243,6 @@ import { webhookPlugin }        from "message-layer/plugins/webhooks";
 import { websocketPlugin }      from "message-layer/plugins/websocket";
 import { scopedKnowledgePlugin }from "message-layer/plugins/scoped-knowledge";
 import { durableStreamsPlugin }  from "message-layer/plugins/durable-streams";
-import { inMemoryKnowledgePlugin } from "message-layer/plugins/in-memory-knowledge";
 
 await startServer({
   plugins: [
@@ -257,12 +255,14 @@ await startServer({
 });
 ```
 
-**Via environment variable** (string names, for process-level config):
+Plugins can also be specified by name via environment variable:
+
 ```bash
 PLUGINS=request-logging,websocket,webhooks node dist/server.js
 ```
 
-**Via `MESSAGE_LAYER_CONFIG` JSON:**
+Or as JSON in `MESSAGE_LAYER_CONFIG`:
+
 ```bash
 MESSAGE_LAYER_CONFIG='{"plugins":[{"name":"websocket"},{"name":"webhooks"}]}' \
   node dist/server.js
@@ -385,9 +385,6 @@ await startServer({
 });
 ```
 
-#### `in-memory-knowledge` _(legacy)_
-Lightweight in-memory message index. Use `scoped-knowledge` for production; this plugin is retained for plugin-authoring examples and tests.
-
 ---
 
 ## HTTP API
@@ -420,6 +417,9 @@ Every authenticated request carries an `x-principal` JSON header. See [`docs/spe
 | `POST` | `/v1/permission-requests` | Open a permission request |
 | `GET` | `/v1/permission-requests` | List open requests |
 | `POST` | `/v1/permission-requests/:id/resolve` | Approve or deny |
+| `POST` | `/v1/commands` | Register a slash command (opens a `command:register` approval request) |
+| `GET` | `/v1/commands` | List active commands (`?channelId=` includes channel-scoped) |
+| `DELETE` | `/v1/commands/:id` | Disable a command (owner or admin) |
 | `POST` | `/v1/artifacts` | Register an artifact (base64 body, privacy-scoped) |
 | `GET` | `/v1/artifacts/:id` | Artifact metadata |
 | `GET` | `/v1/artifacts/:id/content` | Download artifact bytes |
@@ -440,18 +440,27 @@ Every authenticated request carries an `x-principal` JSON header. See [`docs/spe
 `message:append`; when `autoRequestOnDeny` is enabled, denied command calls
 auto-open a `command:invoke` permission request with structured context.
 
+**Slash command registry** — apps and agents register named commands via
+`POST /v1/commands`. Each registration opens a `command:register` permission
+request that an admin resolves. Once approved the command becomes active:
+short-form invocations (`command: "deploy"`) are resolved to the owning
+actor; long-form (`command: "deploybot:deploy"`) is always unambiguous.
+Multiple owners may hold the same short name; invoking the short form when
+two registrations are active is a `ValidationError` — use the long form.
+Invocations of unregistered commands pass through with `commandId: null`
+(backward compatible). `command.invoked` events now carry `commandId` and
+`ownerActorId` so subscribers can route without polling.
+
 ---
 
 ## WebSocket
-
-WebSocket is a first-class plugin. Add it to your plugin list:
 
 ```typescript
 import { websocketPlugin } from "message-layer/plugins/websocket";
 await startServer({ plugins: [websocketPlugin()] });
 ```
 
-Or via env: `PLUGINS=websocket`. The `ENABLE_WEBSOCKET=true` env var still works for backward compatibility.
+Or via env: `PLUGINS=websocket`.
 
 `ws://<host>/v1/ws` accepts the same principal (header or `?principal=…`) and speaks a tiny JSON protocol:
 

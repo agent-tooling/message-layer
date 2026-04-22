@@ -14,6 +14,7 @@ import {
   type ResolveOptions,
   type Thread,
   type WebhookSubscription,
+  type RegisteredCommand,
 } from "message-layer/sdk";
 import { env } from "@/lib/env";
 import {
@@ -37,6 +38,7 @@ export type MlPrincipal = {
 
 // Re-export SDK types that routes rely on
 export type {
+  RegisteredCommand as MlRegisteredCommand,
   ArtifactRecord as MlArtifactRecord,
   Channel,
   ChannelMember,
@@ -447,6 +449,29 @@ export async function appendMessage(
     ...input,
     idempotencyKey: input.idempotencyKey ?? `nextjs-team-client-${randomUUID()}`,
   });
+}
+
+export async function listCommands(
+  principal: MlPrincipal,
+  channelId?: string | null,
+): Promise<RegisteredCommand[]> {
+  const query = channelId ? `?channelId=${encodeURIComponent(channelId)}` : "";
+  const response = await fetch(`${env.MESSAGE_LAYER_BASE_URL}/v1/commands${query}`, {
+    method: "GET",
+    headers: {
+      "content-type": "application/json",
+      "x-principal": JSON.stringify(principal),
+    },
+    cache: "no-store",
+  });
+  const payload = (await response.json()) as {
+    commands?: RegisteredCommand[];
+    error?: string;
+  };
+  if (!response.ok || !Array.isArray(payload.commands)) {
+    throw new Error(payload.error ?? `listCommands failed: HTTP ${response.status}`);
+  }
+  return payload.commands;
 }
 
 export async function createChannel(principal: MlPrincipal, name: string): Promise<string> {

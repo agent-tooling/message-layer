@@ -75,6 +75,12 @@ const clientBody = z.object({
   endpoint: z.string().min(1),
   metadata: z.record(z.unknown()).optional(),
 });
+const registerCommandBody = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  argsSchema: z.record(z.unknown()).optional(),
+  channelId: z.union([z.string(), z.null()]).optional(),
+});
 const registerArtifactBody = z.object({
   streamId: z.string().min(1),
   streamType: streamTypeSchema,
@@ -468,6 +474,47 @@ export function createApp(service: MessageLayerService): Hono {
         },
       );
       return c.json({ ok: true, ...result });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  // commands
+  app.post("/v1/commands", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const body = await parseJsonBody(c, registerCommandBody);
+      const result = await service.registerCommand(auth.principal, {
+        name: body.name,
+        description: body.description,
+        argsSchema: body.argsSchema,
+        channelId: body.channelId,
+      });
+      return c.json(result, 201);
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.get("/v1/commands", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      const channelId = c.req.query("channelId") ?? null;
+      const commands = await service.listCommands(auth.principal, channelId);
+      return c.json({ commands });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
+  app.delete("/v1/commands/:commandId", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      await service.deleteCommand(auth.principal, c.req.param("commandId"));
+      return c.json({ ok: true });
     } catch (e) {
       return handleError(c, e);
     }

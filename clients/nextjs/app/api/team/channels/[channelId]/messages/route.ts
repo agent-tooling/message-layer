@@ -21,23 +21,34 @@ export async function POST(request: Request, { params }: Params) {
   try {
     const { principal } = await requirePrincipal(request.headers);
     const { channelId } = await params;
-    const body = (await request.json()) as { text?: string; attachments?: Array<{ id: string; name: string; mimeType: string; sizeBytes: number; url: string }> };
-    const text = (body.text ?? "").trim();
-    const parts: Array<{ type: "text" | "artifact"; payload: Record<string, unknown> }> = [];
-    if (text) {
-      parts.push({ type: "text", payload: { text } });
+    const body = (await request.json()) as {
+      text?: string;
+      parts?: Array<{ type: "text" | "artifact" | "mention" | "command"; payload: Record<string, unknown> }>;
+      attachments?: Array<{ id: string; name: string; mimeType: string; sizeBytes: number; url: string }>;
+    };
+    const parts: Array<{ type: "text" | "artifact" | "mention" | "command"; payload: Record<string, unknown> }> = [];
+    for (const part of body.parts ?? []) {
+      if (!part || typeof part !== "object") continue;
+      if (!["text", "artifact", "mention", "command"].includes(part.type)) continue;
+      parts.push({ type: part.type, payload: part.payload ?? {} });
     }
-    for (const attachment of body.attachments ?? []) {
-      parts.push({
-        type: "artifact",
-        payload: {
-          attachmentId: attachment.id,
-          name: attachment.name,
-          mimeType: attachment.mimeType,
-          sizeBytes: attachment.sizeBytes,
-          url: attachment.url,
-        },
-      });
+    if (parts.length === 0) {
+      const text = (body.text ?? "").trim();
+      if (text) {
+        parts.push({ type: "text", payload: { text } });
+      }
+      for (const attachment of body.attachments ?? []) {
+        parts.push({
+          type: "artifact",
+          payload: {
+            attachmentId: attachment.id,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            url: attachment.url,
+          },
+        });
+      }
     }
     if (parts.length === 0) {
       return NextResponse.json({ error: "text or attachment required" }, { status: 400 });

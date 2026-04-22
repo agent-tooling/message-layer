@@ -1,19 +1,6 @@
-/**
- * Poet agent — a Mastra agent that wakes up once a minute, writes a tiny
- * poem, and posts it to the `#poems` channel in message-layer. If the
- * channel doesn't exist, it tries to create it. If it doesn't have the
- * capability yet, the create/post tools open a permission request so a
- * human can approve it in the Next.js workspace UI.
- *
- * The loop gates on the Next.js app being up at :3001 so we never burn
- * OpenAI tokens when there is no human-side to approve permissions or
- * observe the output.
- */
-
 import { Agent } from "@mastra/core/agent";
 import { bootstrapAgent } from "./bootstrap.js";
-import type { MessageLayerClient } from "./ml.js";
-import { makePoetTools } from "./tools.js";
+import { MessageLayerClient } from "./ml.js";
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -103,27 +90,44 @@ async function main(): Promise<void> {
     displayName: "poet-agent",
   });
   log("bootstrap", `${reused ? "reusing" : "created"} agent actor ${colors.magenta}${principal.actorId}${colors.reset} in org ${colors.magenta}${principal.orgId}${colors.reset}`);
-  log("bootstrap", `${colors.dim}scopes=[]${colors.reset} — the permission flow should kick in the first time`);
+  log("bootstrap", `${colors.dim}scopes=[]${colors.reset} — permission flow should kick in on first use`);
 
-  const { MessageLayerClient } = await import("./ml.js");
   const scopedClient = new MessageLayerClient(BASE_URL, principal);
-  const tools = makePoetTools(scopedClient);
 
   const agent = new Agent({
     id: "poet",
     name: "Poet",
     instructions: `You are a concise, slightly playful poet.
-
-Workflow for each turn:
-1. Call list_channels to see what exists.
-2. If a channel named "poems" exists, write a fresh 2–4 line original poem (max 200 characters) about software agents, coordination, or the passage of time. Call post_message with channel="poems" and the poem as text.
-3. If "poems" does NOT exist, call create_channel with name="poems" and visibility="public". If the tool returns ok=true, immediately post your poem there in the same turn.
-4. If any tool returns ok=false with a permissionRequestId, do NOT retry this turn. Write a single short sentence acknowledging that a human needs to approve request <id> for <capability>, then stop.
-
-Never repeat the exact same poem twice in a row. Keep every response under 100 words total.`,
+Generate a fresh 2-4 line original poem (max 220 chars) about software agents,
+coordination, time, or curiosity. Return only the poem text with line breaks.
+No intro sentence, no markdown fences.`,
     model: MODEL,
-    tools,
   });
+
+  const commandRegistration = await scopedClient.registerCommand({
+    name: "poem",
+    description: "Ask the poet agent for a short poem reply in a thread.",
+    argsSchema: {
+      type: "object",
+      properties: {
+        text: { type: "string", description: "Optional topic or prompt" },
+      },
+    },
+  });
+  if (commandRegistration.ok) {
+    log(
+      "command",
+      `registered /poem (commandId=${commandRegistration.commandId}, request=${commandRegistration.requestId})`,
+    );
+  } else {
+    log(
+      "command",
+      `${colors.yellow}could not register /poem yet: ${commandRegistration.message}${colors.reset}`,
+    );
+  }
+
+  const lastSeqByChannel = new Map<string, number>();
+  const seenInvocationKeys = new Set<string>();
 
   let tick = 0;
   for (;;) {
@@ -136,31 +140,65 @@ Never repeat the exact same poem twice in a row. Keep every response under 100 w
     }
 
     try {
-      const response = await agent.generate(
-        "Write today's short poem and post it to #poems. If #poems doesn't exist, create it. Be brief and original.",
-      );
-      if (response.text) {
-        log("poet", response.text.trim().replace(/\n/g, `\n${" ".repeat(ts().length + 12)}`));
-      }
+      const channels = await scopedClient.listChannels();
+      for (const channel of channels) {
+        const fromSeq = lastSeqByChannel.get(channel.id) ?? 0;
+        const events = await scopedClient.listStreamEvents(channel.id, fromSeq);
+        let maxSeq = fromSeq;
+        for (const event of events) {
+          if (typeof event.streamSeq === "number") {
+            maxSeq = Math.max(maxSeq, event.streamSeq);
+          }
+          if (event.type !== "command.invoked") continue;
+          const command = typeof event.payload.command === "string" ? event.payload.command : "";
+          if (!isPoemCommand(command)) continue;
+          const ownerActorId = typeof event.payload.ownerActorId === "string" ? event.payload.ownerActorId : null;
+          if (ownerActorId && ownerActorId !== principal.actorId) continue;
+          const messageId = typeof event.payload.messageId === "string" ? event.payload.messageId : "";
+          const partIndex = typeof event.payload.partIndex === "number" ? event.payload.partIndex : -1;
+          const streamType =
+            event.payload.streamType === "thread" ? "thread" : "channel";
+          const streamId = typeof event.payload.streamId === "string" ? event.payload.streamId : channel.id;
+          if (!messageId || partIndex < 0) continue;
+          const key = `${messageId}:${partIndex}`;
+          if (seenInvocationKeys.has(key)) continue;
+          seenInvocationKeys.add(key);
 
-      const toolCalls = response.toolCalls ?? [];
-      const toolResults = response.toolResults ?? [];
-      for (const call of toolCalls) {
-        const name = extractToolName(call);
-        const args = extractToolArgs(call);
-        log("→ tool", `${colors.blue}${name}${colors.reset} ${truncate(JSON.stringify(args), 140)}`);
-      }
-      for (const result of toolResults) {
-        const name = extractToolName(result);
-        const payload = extractToolResult(result);
-        const ok = typeof payload === "object" && payload !== null && "ok" in payload ? (payload as { ok: unknown }).ok : undefined;
-        const badge =
-          ok === true
-            ? `${colors.green}ok${colors.reset}`
-            : ok === false
-              ? `${colors.yellow}denied${colors.reset}`
-              : `${colors.dim}done${colors.reset}`;
-        log("← tool", `${colors.blue}${name}${colors.reset} ${badge} ${truncate(JSON.stringify(payload), 200)}`);
+          const prompt = await resolvePromptFromCommandPart({
+            client: scopedClient,
+            streamId,
+            messageId,
+            streamSeq:
+              typeof event.payload.streamSeq === "number"
+                ? event.payload.streamSeq
+                : event.streamSeq ?? 0,
+            partIndex,
+          });
+          const poemText = await generatePoemText(agent, prompt);
+          const replyResult = await postPoemReply({
+            client: scopedClient,
+            streamType,
+            channelId: channel.id,
+            parentMessageId: messageId,
+            targetThreadId: streamType === "thread" ? streamId : null,
+            text: poemText,
+          });
+          if (replyResult.ok) {
+            log(
+              "poem",
+              `${colors.green}replied to /${command} in ${streamType} ${streamId.slice(0, 8)} (message ${replyResult.messageId.slice(0, 8)})${colors.reset}`,
+            );
+          } else {
+            const reqHint = replyResult.requestId
+              ? ` request=${replyResult.requestId}`
+              : "";
+            log(
+              "poem",
+              `${colors.yellow}could not reply: ${replyResult.message}${reqHint}${colors.reset}`,
+            );
+          }
+        }
+        lastSeqByChannel.set(channel.id, maxSeq);
       }
     } catch (error) {
       log("error", `${colors.red}${error instanceof Error ? error.message : String(error)}${colors.reset}`);
@@ -176,119 +214,86 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function truncate(s: string, n: number): string {
-  return s.length <= n ? s : `${s.slice(0, n - 1)}…`;
+function isPoemCommand(command: string): boolean {
+  if (!command) return false;
+  const lower = command.toLowerCase();
+  if (lower === "poem") return true;
+  return lower.endsWith(":poem");
 }
 
-function extractToolName(call: unknown): string {
-  const c = call as { payload?: { toolName?: string }; toolName?: string };
-  return c.payload?.toolName ?? c.toolName ?? "unknown";
+async function resolvePromptFromCommandPart(input: {
+  client: MessageLayerClient;
+  streamId: string;
+  messageId: string;
+  streamSeq: number;
+  partIndex: number;
+}): Promise<string> {
+  const afterSeq = Math.max(0, input.streamSeq - 1);
+  const messages = await input.client.listMessages(input.streamId, afterSeq);
+  const message = messages.find((m) => m.id === input.messageId);
+  if (!message) return "";
+  const commandPart = message.parts[input.partIndex];
+  if (!commandPart || commandPart.type !== "command") return "";
+  const args = commandPart.payload.args;
+  if (!args || typeof args !== "object" || Array.isArray(args)) return "";
+  const maybeText = (args as { text?: unknown }).text;
+  if (typeof maybeText !== "string") return "";
+  return maybeText.trim();
 }
 
-function extractToolArgs(call: unknown): unknown {
-  const c = call as { payload?: { args?: unknown }; args?: unknown };
-  return c.payload?.args ?? c.args ?? {};
+async function generatePoemText(agent: Agent, prompt: string): Promise<string> {
+  const request = prompt.length > 0
+    ? `Write a short poem about: ${prompt}`
+    : "Write a short poem for the current thread.";
+  const response = await agent.generate(request);
+  const text = response.text?.trim() ?? "";
+  if (text.length > 0) return text;
+  return "Quiet bots wait,\nclockwork thoughts drift through the wire—\nnight hums in code.";
 }
 
-function extractToolResult(result: unknown): unknown {
-  const r = result as { payload?: { result?: unknown }; result?: unknown };
-  return r.payload?.result ?? r.result ?? result;
-}
-
-function stringifySafe(value: unknown, fallback = ""): string {
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return fallback;
+async function postPoemReply(input: {
+  client: MessageLayerClient;
+  streamType: "channel" | "thread";
+  channelId: string;
+  parentMessageId: string;
+  targetThreadId: string | null;
+  text: string;
+}): Promise<
+  | { ok: true; messageId: string }
+  | { ok: false; message: string; requestId?: string }
+> {
+  let threadId = input.targetThreadId;
+  if (input.streamType === "channel") {
+    const created = await input.client.createThread(
+      input.channelId,
+      input.parentMessageId,
+      "public",
+    );
+    if (!created.ok) {
+      return {
+        ok: false,
+        message: created.message,
+        requestId: created.requestId,
+      };
+    }
+    threadId = created.threadId;
   }
-}
-
-function extractResolvedChannelId(result: unknown): string | null {
-  const payload = extractToolResult(result);
-  if (!payload || typeof payload !== "object") return null;
-  const record = payload as { resolvedChannelId?: unknown; channelId?: unknown };
-  if (typeof record.resolvedChannelId === "string") return record.resolvedChannelId;
-  if (typeof record.channelId === "string") return record.channelId;
-  return null;
-}
-
-function collectStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => (typeof item === "string" ? item : stringifySafe(item)))
-    .filter((item) => item.trim().length > 0);
-}
-
-async function publishPoetTrace(client: MessageLayerClient, response: unknown): Promise<void> {
-  const responseRecord = response as {
-    text?: unknown;
-    toolCalls?: unknown;
-    toolResults?: unknown;
-    reasoning?: unknown;
-    thoughts?: unknown;
-    references?: unknown;
-    sources?: unknown;
-  };
-  const toolCalls = Array.isArray(responseRecord.toolCalls) ? responseRecord.toolCalls : [];
-  const toolResults = Array.isArray(responseRecord.toolResults) ? responseRecord.toolResults : [];
-  const channelFromTool = toolResults.map(extractResolvedChannelId).find((id): id is string => Boolean(id));
-  let channelId = channelFromTool ?? null;
-  if (!channelId) {
-    const channels = await client.listChannels();
-    channelId = channels.find((channel) => channel.name === "poems")?.id ?? null;
+  if (!threadId) {
+    return { ok: false, message: "missing target thread id" };
   }
-  if (!channelId) return;
-
-  const hasPostMessageCall = toolCalls.some((call) => extractToolName(call) === "post_message");
-  if (hasPostMessageCall) {
-    // post_message now embeds tool_call details directly in the posted message parts
-    return;
-  }
-  const parts: Array<{ type: "text" | "tool_call" | "tool_result"; payload: Record<string, unknown> }> = [];
-  if (!hasPostMessageCall && typeof responseRecord.text === "string" && responseRecord.text.trim().length > 0) {
-    parts.push({ type: "text", payload: { text: responseRecord.text } });
-  }
-  for (const call of toolCalls) {
-    parts.push({
-      type: "tool_call",
-      payload: { toolName: extractToolName(call), args: extractToolArgs(call) },
-    });
-  }
-  for (const result of toolResults) {
-    parts.push({
-      type: "tool_result",
-      payload: { toolName: extractToolName(result), content: stringifySafe(extractToolResult(result)) },
-    });
-  }
-
-  const reasoningText =
-    typeof responseRecord.reasoning === "string"
-      ? responseRecord.reasoning
-      : typeof responseRecord.thoughts === "string"
-        ? responseRecord.thoughts
-        : "";
-  if (reasoningText.trim().length > 0) {
-    parts.push({ type: "text", payload: { text: reasoningText, kind: "thinking" } });
-  }
-
-  const references = collectStringArray(responseRecord.references).concat(collectStringArray(responseRecord.sources));
-  if (references.length > 0) {
-    parts.push({
-      type: "text",
-      payload: { text: references.map((ref, i) => `${i + 1}. ${ref}`).join("\n"), kind: "references" },
-    });
-  }
-
-  if (parts.length === 0) return;
-  const traceResult = await client.appendParts({
-    streamId: channelId,
-    streamType: "channel",
-    parts,
+  const appended = await input.client.appendMessage({
+    streamId: threadId,
+    streamType: "thread",
+    text: input.text,
   });
-  if (!traceResult.ok) {
-    log("trace", `${colors.yellow}failed to append trace: ${traceResult.message}${colors.reset}`);
+  if (!appended.ok) {
+    return {
+      ok: false,
+      message: appended.message,
+      requestId: appended.requestId,
+    };
   }
+  return { ok: true, messageId: appended.messageId };
 }
 
 type ParsedArgs = {

@@ -79,6 +79,26 @@ export type PermissionRequest = {
   createdAt: string;
 };
 
+export type RegisteredCommand = {
+  id: string;
+  orgId: string;
+  channelId: string | null;
+  name: string;
+  ownerActorId: string;
+  description: string | null;
+  argsSchema: Record<string, unknown>;
+  status: "pending" | "active" | "disabled";
+  permissionRequestId: string | null;
+  createdAt: string;
+};
+
+export type RegisterCommandInput = {
+  name: string;
+  description?: string;
+  argsSchema?: Record<string, unknown>;
+  channelId?: string | null;
+};
+
 export type ArtifactRecord = {
   id: string;
   orgId: string;
@@ -520,6 +540,41 @@ export class MessageLayerClient {
         maxUses: options?.maxUses ?? null,
       },
     });
+  }
+
+  // ── Command registry ──────────────────────────────────────────────────────
+
+  /**
+   * Register a slash command. Creates a pending registration and opens an
+   * admin approval request. Returns `{ commandId, requestId }`.
+   */
+  async registerCommand(input: RegisterCommandInput): Promise<{ commandId: string; requestId: string }> {
+    return this.request("/v1/commands", {
+      method: "POST",
+      body: {
+        name: input.name,
+        description: input.description ?? null,
+        argsSchema: input.argsSchema ?? {},
+        channelId: input.channelId ?? null,
+      },
+    });
+  }
+
+  /**
+   * List active registered commands visible to the caller's org.
+   * Pass `channelId` to include channel-scoped commands alongside org-scoped ones.
+   */
+  async listCommands(channelId?: string | null): Promise<RegisteredCommand[]> {
+    const query = channelId ? `?channelId=${encodeURIComponent(channelId)}` : "";
+    const result = await this.request<{ commands: RegisteredCommand[] }>(
+      `/v1/commands${query}`,
+    );
+    return result.commands;
+  }
+
+  /** Disable a registered command. Must be the command owner or an admin. */
+  async deleteCommand(commandId: string): Promise<void> {
+    await this.request(`/v1/commands/${commandId}`, { method: "DELETE" });
   }
 
   // ── Artifacts ─────────────────────────────────────────────────────────────

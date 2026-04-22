@@ -4,6 +4,14 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import {
+  applyCommandSelection,
+  applyMentionSelection,
+  extractActiveCommandQuery,
+  extractActiveMentionQuery,
+  parseComposerInput,
+  type CommandSuggestion,
+} from "@/lib/composer-parts";
+import {
   ApprovalInbox,
   type PermissionRequest as ApprovalPermissionRequest,
   type ResolveApprovalOptions,
@@ -50,6 +58,12 @@ type WebhookSubscription = {
   enabled: boolean;
   createdAt: string;
 };
+type RegisteredCommand = {
+  id: string;
+  name: string;
+  ownerActorId: string;
+  description: string | null;
+};
 
 export function TeamWorkspace() {
   const { data: session } = authClient.useSession();
@@ -73,6 +87,7 @@ export function TeamWorkspace() {
   const [currentActorId, setCurrentActorId] = useState<string | null>(null);
   const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([]);
   const [webhooksAvailable, setWebhooksAvailable] = useState(true);
+  const [commands, setCommands] = useState<RegisteredCommand[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const activeThreads = threadsByChannel[activeChannelId] ?? [];
@@ -132,6 +147,36 @@ export function TeamWorkspace() {
     () => members.filter((member) => member.actorType === "human"),
     [members],
   );
+  const mentionQuery = extractActiveMentionQuery(input);
+  const commandQuery = extractActiveCommandQuery(input);
+  const commandSuggestions = useMemo<CommandSuggestion[]>(
+    () =>
+      commands.map((cmd) => ({
+        name: cmd.name,
+        ownerActorId: cmd.ownerActorId,
+        description: cmd.description,
+      })),
+    [commands],
+  );
+  const mentionSuggestions = useMemo(() => {
+    if (mentionQuery === null) return [];
+    const q = mentionQuery.trim().toLowerCase();
+    return actors
+      .filter((actor) => actor.actorId !== currentActorId)
+      .filter((actor) =>
+        q.length === 0
+          ? true
+          : actor.displayName.toLowerCase().includes(q),
+      )
+      .slice(0, 6);
+  }, [actors, mentionQuery, currentActorId]);
+  const slashSuggestions = useMemo(() => {
+    if (commandQuery === null) return [];
+    const q = commandQuery.trim().toLowerCase();
+    return commandSuggestions
+      .filter((cmd) => (q.length === 0 ? true : cmd.name.toLowerCase().includes(q)))
+      .slice(0, 8);
+  }, [commandSuggestions, commandQuery]);
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(path, { ...init, cache: "no-store" });
@@ -191,6 +236,13 @@ export function TeamWorkspace() {
     setThreadsByChannel((prev) => ({ ...prev, [channelId]: result.threads }));
   }
 
+  async function refreshCommands(channelId: string) {
+    const result = await api<{ commands: RegisteredCommand[] }>(
+      `/api/team/commands?channelId=${encodeURIComponent(channelId)}`,
+    );
+    setCommands(result.commands);
+  }
+
   useEffect(() => {
     if (!session) return;
     void api<{ ok: true; defaultChannelId: string; actorId: string }>(
@@ -224,12 +276,16 @@ export function TeamWorkspace() {
     void refreshThreads(activeChannelId).catch((err) =>
       setError((err as Error).message),
     );
+    void refreshCommands(activeChannelId).catch((err) =>
+      setError((err as Error).message),
+    );
     const timer = setInterval(() => {
       void refreshMessages(activeChannelId).catch(() => {});
       void refreshThreads(activeChannelId).catch(() => {});
       void refreshApprovals().catch(() => {});
       void refreshDirectory().catch(() => {});
       void refreshWebhooks().catch(() => {});
+      void refreshCommands(activeChannelId).catch(() => {});
     }, 2200);
     return () => clearInterval(timer);
   }, [activeChannelId]);
@@ -248,13 +304,37 @@ export function TeamWorkspace() {
   async function sendMessage(event: React.FormEvent) {
     event.preventDefault();
     if (!activeChannelId) return;
-    const text = input.trim();
-    if (!text && pendingUpload.length === 0) return;
+    const parsed = parseComposerInput({
+      text: input,
+      actors: actors.map((actor) => ({
+        actorId: actor.actorId,
+        displayName: actor.displayName,
+        actorType: actor.actorType,
+      })),
+      commands: commandSuggestions,
+    });
+    if (parsed.parts.length === 0 && pendingUpload.length === 0) return;
+    const parts: Array<{
+      type: "text" | "artifact" | "mention" | "command";
+      payload: Record<string, unknown>;
+    }> = [...parsed.parts];
+    for (const attachment of pendingUpload) {
+      parts.push({
+        type: "artifact",
+        payload: {
+          attachmentId: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          url: attachment.url,
+        },
+      });
+    }
     try {
       await api(`/api/team/channels/${activeChannelId}/messages`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text, attachments: pendingUpload }),
+        body: JSON.stringify({ parts }),
       });
       setInput("");
       setPendingUpload([]);
@@ -444,6 +524,14 @@ export function TeamWorkspace() {
 
   function closeThread() {
     setActiveThreadId(null);
+  }
+
+  function selectMention(displayName: string) {
+    setInput((current) => applyMentionSelection(current, displayName));
+  }
+
+  function selectCommand(name: string) {
+    setInput((current) => applyCommandSelection(current, name));
   }
 
   function copyInviteLink() {
@@ -752,12 +840,46 @@ export function TeamWorkspace() {
 
         <div className="border-t border-zinc-800/80 bg-zinc-950/80 p-5">
           <form className="space-y-3" onSubmit={sendMessage}>
-            <textarea
-              className="h-28 w-full rounded-xl border border-zinc-700/80 bg-zinc-900/80 p-3 text-sm leading-relaxed outline-none transition focus:border-emerald-500/70"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="Send a message..."
-            />
+            <div className="relative">
+              <textarea
+                className="h-28 w-full rounded-xl border border-zinc-700/80 bg-zinc-900/80 p-3 text-sm leading-relaxed outline-none transition focus:border-emerald-500/70"
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="Send a message... (@mention, /command)"
+              />
+              {mentionQuery !== null && mentionSuggestions.length > 0 ? (
+                <div className="absolute left-2 right-2 top-2 z-10 max-h-48 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
+                  {mentionSuggestions.map((actor) => (
+                    <button
+                      key={actor.actorId}
+                      type="button"
+                      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-zinc-200 transition hover:bg-zinc-800"
+                      onClick={() => selectMention(actor.displayName)}
+                    >
+                      <span>@{actor.displayName}</span>
+                      <span className="text-zinc-500">{actor.actorType}</span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {commandQuery !== null && slashSuggestions.length > 0 ? (
+                <div className="absolute left-2 right-2 top-2 z-10 max-h-48 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-900/95 p-1 shadow-xl">
+                  {slashSuggestions.map((cmd) => (
+                    <button
+                      key={`${cmd.ownerActorId}:${cmd.name}`}
+                      type="button"
+                      className="flex w-full items-center justify-between rounded px-2 py-1.5 text-left text-xs text-zinc-200 transition hover:bg-zinc-800"
+                      onClick={() => selectCommand(cmd.name)}
+                    >
+                      <span>/{cmd.name}</span>
+                      <span className="truncate pl-2 text-zinc-500">
+                        {cmd.description ?? cmd.ownerActorId.slice(0, 8)}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
             <div className="flex flex-wrap items-center gap-3">
               <label className="inline-flex cursor-pointer items-center rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-medium text-zinc-200 transition hover:bg-zinc-800">
                 Attach file
@@ -780,6 +902,9 @@ export function TeamWorkspace() {
                   {activeThreads.length === 1 ? "" : "s"} in channel
                 </span>
               ) : null}
+              <span className="text-xs text-zinc-500">
+                Tip: use <code>@name</code> and <code>/poem</code>
+              </span>
             </div>
             {pendingUpload.length > 0 ? (
               <div className="text-xs text-zinc-400">
@@ -799,6 +924,7 @@ export function TeamWorkspace() {
           threadCount={activeThreadSiblings.length || 1}
           parentMessage={activeThreadParentMessage}
           actorsById={actorsById}
+          commands={commandSuggestions}
           currentActorId={currentActorId}
           onClose={closeThread}
         />

@@ -179,6 +179,22 @@ CREATE TABLE IF NOT EXISTS audit_events (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS registered_commands (
+  id                    TEXT PRIMARY KEY,
+  org_id                TEXT NOT NULL,
+  channel_id            TEXT,
+  name                  TEXT NOT NULL,
+  owner_actor_id        TEXT NOT NULL,
+  description           TEXT,
+  args_schema_json      TEXT NOT NULL DEFAULT '{}',
+  status                TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','active','disabled')),
+  permission_request_id TEXT,
+  created_at            TEXT NOT NULL,
+  FOREIGN KEY (org_id) REFERENCES organizations(id),
+  FOREIGN KEY (owner_actor_id) REFERENCES actors(id),
+  UNIQUE (org_id, channel_id, owner_actor_id, name)
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_stream ON messages(stream_id, stream_seq);
 CREATE INDEX IF NOT EXISTS idx_events_stream ON events(stream_id, stream_seq);
 CREATE INDEX IF NOT EXISTS idx_events_org ON events(org_id, created_at);
@@ -187,6 +203,7 @@ CREATE INDEX IF NOT EXISTS idx_memberships_actor ON memberships(org_id, actor_id
 CREATE INDEX IF NOT EXISTS idx_memberships_channel ON memberships(org_id, channel_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_stream ON artifacts(org_id, stream_id);
 CREATE INDEX IF NOT EXISTS idx_grants_lookup ON grants(org_id, actor_id, capability, resource_type, active);
+CREATE INDEX IF NOT EXISTS idx_commands_lookup ON registered_commands(org_id, channel_id, name, status);
 `;
 
 export type SqlValue = string | number | null;

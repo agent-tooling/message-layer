@@ -22,6 +22,7 @@ import {
   type PermissionRequestContext,
   type PermissionRequestStatus,
   type Principal,
+  type RegisteredCommand,
   type StreamType,
   type Visibility,
   messagePartSchema,
@@ -39,6 +40,9 @@ const EVENT_TYPES = [
   "message.appended",
   "mention.recorded",
   "command.invoked",
+  "command.registration_requested",
+  "command.registered",
+  "command.deleted",
   "message.redacted",
   "membership.updated",
   "cursor.updated",
@@ -71,6 +75,9 @@ type CommandPartInput = {
   args: Record<string, unknown>;
   invocationId: string | null;
   partIndex: number;
+  /** Resolved from registered_commands; null when command is unregistered. */
+  commandId: string | null;
+  ownerActorId: string | null;
 };
 
 /**
@@ -352,12 +359,16 @@ export class MessageLayer {
     }
   }
 
-  private collectCommandParts(parts: MessagePart[]): CommandPartInput[] {
+  private async collectCommandParts(
+    principal: Principal,
+    channelId: string,
+    parts: MessagePart[],
+  ): Promise<CommandPartInput[]> {
     const out: CommandPartInput[] = [];
     for (const [partIndex, part] of parts.entries()) {
       if (part.type !== "command") continue;
-      const command = typeof part.payload.command === "string" ? part.payload.command.trim() : "";
-      if (!command) {
+      const rawCommand = typeof part.payload.command === "string" ? part.payload.command.trim() : "";
+      if (!rawCommand) {
         throw new ValidationError("command part requires a non-empty payload.command");
       }
       const argsValue = part.payload.args;
@@ -375,7 +386,66 @@ export class MessageLayer {
         typeof invocationIdRaw === "string" && invocationIdRaw.trim().length > 0
           ? invocationIdRaw.trim()
           : null;
-      out.push({ command, args, invocationId, partIndex });
+
+      // Resolve against registered commands. Long form is "ownerName:cmdName".
+      let commandId: string | null = null;
+      let ownerActorId: string | null = null;
+      const colonIdx = rawCommand.indexOf(":");
+      if (colonIdx > 0) {
+        // Long form — resolve by owner display_name + command name.
+        const ownerName = rawCommand.slice(0, colonIdx).trim();
+        const cmdName = rawCommand.slice(colonIdx + 1).trim();
+        if (!ownerName || !cmdName) {
+          throw new ValidationError(`invalid long-form command syntax: ${rawCommand}`);
+        }
+        const ownerRow = await this.queryOne<{ id: string }>(
+          "SELECT id FROM actors WHERE org_id=? AND display_name=? LIMIT 1",
+          [principal.orgId, ownerName],
+        );
+        if (ownerRow) {
+          // Prefer channel-scoped over org-scoped.
+          const cmdRow = await this.queryOne<{ id: string; owner_actor_id: string }>(
+            `SELECT id, owner_actor_id FROM registered_commands
+              WHERE org_id=? AND owner_actor_id=? AND name=? AND status='active'
+              ORDER BY CASE WHEN channel_id=? THEN 0 ELSE 1 END ASC
+              LIMIT 1`,
+            [principal.orgId, ownerRow.id, cmdName, channelId],
+          );
+          if (cmdRow) {
+            commandId = cmdRow.id;
+            ownerActorId = cmdRow.owner_actor_id;
+          }
+        }
+      } else {
+        // Short form — look up active registrations in channel scope first, then org.
+        const cmdRows = await this.query<{ id: string; owner_actor_id: string; channel_id: string | null }>(
+          `SELECT id, owner_actor_id, channel_id FROM registered_commands
+            WHERE org_id=? AND name=? AND status='active'
+              AND (channel_id=? OR channel_id IS NULL)`,
+          [principal.orgId, rawCommand, channelId],
+        );
+        // Prefer channel-scoped; if multiple at the same scope → ambiguous.
+        const channelScoped = cmdRows.filter((r) => r.channel_id !== null);
+        const orgScoped = cmdRows.filter((r) => r.channel_id === null);
+        const candidates = channelScoped.length > 0 ? channelScoped : orgScoped;
+        if (candidates.length > 1) {
+          const ownerIds = candidates.map((r) => r.owner_actor_id);
+          const ownerRows = await this.query<{ id: string; display_name: string }>(
+            `SELECT id, display_name FROM actors WHERE id IN (${ownerIds.map(() => "?").join(",")})`,
+            ownerIds,
+          );
+          const names = ownerRows.map((r) => `${r.display_name}:${rawCommand}`).join(", ");
+          throw new ValidationError(
+            `ambiguous command '${rawCommand}'; use long form — e.g. ${names}`,
+          );
+        }
+        if (candidates.length === 1) {
+          commandId = candidates[0].id;
+          ownerActorId = candidates[0].owner_actor_id;
+        }
+      }
+
+      out.push({ command: rawCommand, args, invocationId, partIndex, commandId, ownerActorId });
     }
     return out;
   }
@@ -454,7 +524,7 @@ export class MessageLayer {
       throw new PermissionError("stream not in principal org");
     }
     const mentions = await this.collectMentionParts(principal, resolved, parts);
-    const commands = this.collectCommandParts(parts);
+    const commands = await this.collectCommandParts(principal, resolved.channelId, parts);
     return { mentions, commands };
   }
 
@@ -1188,6 +1258,8 @@ export class MessageLayer {
               messageId,
               streamSeq,
               command: command.command,
+              commandId: command.commandId,
+              ownerActorId: command.ownerActorId,
               invocationId: command.invocationId,
               partIndex: command.partIndex,
               argKeys: Object.keys(command.args),
@@ -1613,7 +1685,7 @@ export class MessageLayer {
     requestId: string,
     approve: boolean,
     options: ApprovalOptions = {},
-  ): Promise<{ status: PermissionRequestStatus; grantId: string | null }> {
+  ): Promise<{ status: PermissionRequestStatus; grantId: string | null; commandId: string | null }> {
     await this.assertOrgActor(principal);
     if (!principal.scopes.includes("grant:create") && !(await this.hasGrant(principal, "grant:create", "org", principal.orgId))) {
       throw new PermissionError("missing grant:create", { capability: "grant:create", resourceType: "org", resourceId: principal.orgId });
@@ -1625,14 +1697,69 @@ export class MessageLayer {
       resource_type: string;
       resource_id: string | null;
       status: PermissionRequestStatus;
+      request_context_json: unknown;
     }>(
-      "SELECT actor_id,action,resource_type,resource_id,status FROM permission_requests WHERE id=? AND org_id=?",
+      "SELECT actor_id,action,resource_type,resource_id,status,request_context_json FROM permission_requests WHERE id=? AND org_id=?",
       [requestId, principal.orgId],
     );
     if (!req) throw new NotFoundError(`permission request not found: ${requestId}`);
     if (req.status !== "open") throw new ValidationError("request not open");
 
     const notes = options.notes ?? "";
+    const status: PermissionRequestStatus = approve ? "approved" : "denied";
+
+    // Command registration requests are resolved by activating or disabling
+    // the pending registered_commands row — no generic grant is created.
+    if (req.action === "command:register") {
+      const context = parseJsonRecord(req.request_context_json) as PermissionRequestContext;
+      const commandId = typeof context.commandId === "string" ? context.commandId : null;
+      const events = await this.db.tx(async (tx) => {
+        if (commandId) {
+          await this.txQuery(
+            tx,
+            "UPDATE registered_commands SET status=? WHERE id=?",
+            [approve ? "active" : "disabled", commandId],
+          );
+        }
+        await this.txQuery(
+          tx,
+          "UPDATE permission_requests SET status=?,resolution_notes=?,resolver_actor_id=?,resolved_at=? WHERE id=?",
+          [status, notes, principal.actorId, this.ts(), requestId],
+        );
+        const resolvedEvent = await this.emit(tx, {
+          orgId: principal.orgId,
+          eventType: "permission_request.resolved",
+          payload: {
+            orgId: principal.orgId,
+            requestId,
+            status,
+            grantId: null,
+            commandId,
+            resolverActorId: principal.actorId,
+          },
+        });
+        if (approve && commandId) {
+          const registeredEvent = await this.emit(tx, {
+            orgId: principal.orgId,
+            eventType: "command.registered",
+            payload: {
+              orgId: principal.orgId,
+              commandId,
+              requestId,
+              name: context.name ?? null,
+              channelId: context.channelId ?? null,
+              ownerActorId: context.ownerActorId ?? null,
+              resolverActorId: principal.actorId,
+            },
+          });
+          return [resolvedEvent, registeredEvent];
+        }
+        return [resolvedEvent];
+      });
+      for (const e of events) this.bus.publish(e);
+      return { status, grantId: null, commandId };
+    }
+
     let grantId: string | null = null;
     if (approve) {
       grantId = await this.createGrant(
@@ -1646,7 +1773,6 @@ export class MessageLayer {
         options.maxUses ?? null,
       );
     }
-    const status: PermissionRequestStatus = approve ? "approved" : "denied";
     const event = await this.db.tx(async (tx) => {
       await this.txQuery(
         tx,
@@ -1661,6 +1787,7 @@ export class MessageLayer {
           requestId,
           status,
           grantId,
+          commandId: null,
           expiresAt: options.expiresAt ?? null,
           maxUses: options.maxUses ?? null,
           resolverActorId: principal.actorId,
@@ -1668,7 +1795,7 @@ export class MessageLayer {
       });
     });
     this.bus.publish(event);
-    return { status, grantId };
+    return { status, grantId, commandId: null };
   }
 
   async checkGrant(orgId: string, actorId: string, capability: string): Promise<boolean> {
@@ -2152,6 +2279,213 @@ export class MessageLayer {
     );
     this.bus.publish(event);
     return event;
+  }
+
+  // ── command registry ─────────────────────────────────────────────────────
+
+  /**
+   * Register a slash command on behalf of the calling actor (must be agent
+   * or app). Creates a `pending` row and auto-opens a `command:register`
+   * permission request so an admin can approve or deny. Returns both IDs so
+   * the caller can track the request state.
+   */
+  async registerCommand(
+    principal: Principal,
+    input: {
+      name: string;
+      description?: string;
+      argsSchema?: Record<string, unknown>;
+      channelId?: string | null;
+    },
+  ): Promise<{ commandId: string; requestId: string }> {
+    await this.assertOrgActor(principal);
+    const name = typeof input.name === "string" ? input.name.trim() : "";
+    if (!name) throw new ValidationError("name is required");
+    if (!/^[a-z0-9_-]+$/i.test(name)) {
+      throw new ValidationError("command name may only contain letters, digits, hyphens, and underscores");
+    }
+    const channelId = input.channelId ?? null;
+    if (channelId) {
+      const ch = await this.loadChannel(channelId);
+      if (!ch) throw new NotFoundError(`channel not found: ${channelId}`);
+      if (ch.orgId !== principal.orgId) throw new PermissionError("channel not in principal org");
+    }
+    const argsSchema = input.argsSchema ?? {};
+
+    // Guard: one active-or-pending registration per owner per name per scope.
+    const existing = channelId
+      ? await this.queryOne(
+          `SELECT id FROM registered_commands
+            WHERE org_id=? AND owner_actor_id=? AND name=? AND channel_id=?
+              AND status IN ('pending', 'active')
+            LIMIT 1`,
+          [principal.orgId, principal.actorId, name, channelId],
+        )
+      : await this.queryOne(
+          `SELECT id FROM registered_commands
+            WHERE org_id=? AND owner_actor_id=? AND name=? AND channel_id IS NULL
+              AND status IN ('pending', 'active')
+            LIMIT 1`,
+          [principal.orgId, principal.actorId, name],
+        );
+    if (existing) {
+      throw new ValidationError(
+        `command '${name}' is already registered (pending or active) by this actor in this scope`,
+      );
+    }
+
+    const commandId = this.id();
+    const requestId = this.id();
+    const now = this.ts();
+    const context: PermissionRequestContext = {
+      kind: "command.register",
+      commandId,
+      name,
+      description: input.description ?? null,
+      channelId,
+      ownerActorId: principal.actorId,
+    };
+    const events = await this.db.tx(async (tx) => {
+      await this.txQuery(
+        tx,
+        `INSERT INTO registered_commands(id,org_id,channel_id,name,owner_actor_id,description,args_schema_json,status,permission_request_id,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        [
+          commandId,
+          principal.orgId,
+          channelId,
+          name,
+          principal.actorId,
+          input.description ?? null,
+          stableJson(argsSchema),
+          "pending",
+          requestId,
+          now,
+        ],
+      );
+      await this.txQuery(
+        tx,
+        `INSERT INTO permission_requests(id,org_id,actor_id,action,resource_type,resource_id,status,request_context_json,created_at)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+        [
+          requestId,
+          principal.orgId,
+          principal.actorId,
+          "command:register",
+          channelId ? "channel" : "org",
+          channelId ?? principal.orgId,
+          "open",
+          stableJson(context),
+          now,
+        ],
+      );
+      const requestedEvent = await this.emit(tx, {
+        orgId: principal.orgId,
+        eventType: "command.registration_requested",
+        payload: {
+          orgId: principal.orgId,
+          commandId,
+          requestId,
+          name,
+          channelId,
+          ownerActorId: principal.actorId,
+          description: input.description ?? null,
+        },
+      });
+      return [requestedEvent];
+    });
+    for (const e of events) this.bus.publish(e);
+    return { commandId, requestId };
+  }
+
+  async listCommands(
+    principal: Principal,
+    channelId?: string | null,
+  ): Promise<RegisteredCommand[]> {
+    await this.assertOrgActor(principal);
+    const rows = await this.query<{
+      id: string;
+      org_id: string;
+      channel_id: string | null;
+      name: string;
+      owner_actor_id: string;
+      description: string | null;
+      args_schema_json: unknown;
+      status: string;
+      permission_request_id: string | null;
+      created_at: string;
+    }>(
+      channelId
+        ? `SELECT id,org_id,channel_id,name,owner_actor_id,description,args_schema_json,status,permission_request_id,created_at
+             FROM registered_commands
+            WHERE org_id=? AND status='active' AND (channel_id=? OR channel_id IS NULL)
+            ORDER BY name ASC`
+        : `SELECT id,org_id,channel_id,name,owner_actor_id,description,args_schema_json,status,permission_request_id,created_at
+             FROM registered_commands
+            WHERE org_id=? AND status='active' AND channel_id IS NULL
+            ORDER BY name ASC`,
+      channelId ? [principal.orgId, channelId] : [principal.orgId],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      orgId: r.org_id,
+      channelId: r.channel_id,
+      name: r.name,
+      ownerActorId: r.owner_actor_id,
+      description: r.description,
+      argsSchema: parseJsonRecord(r.args_schema_json),
+      status: r.status as RegisteredCommand["status"],
+      permissionRequestId: r.permission_request_id,
+      createdAt: r.created_at,
+    }));
+  }
+
+  async deleteCommand(principal: Principal, commandId: string): Promise<void> {
+    await this.assertOrgActor(principal);
+    const row = await this.queryOne<{
+      id: string;
+      org_id: string;
+      channel_id: string | null;
+      owner_actor_id: string;
+      name: string;
+    }>(
+      "SELECT id,org_id,channel_id,owner_actor_id,name FROM registered_commands WHERE id=?",
+      [commandId],
+    );
+    if (!row) throw new NotFoundError(`command not found: ${commandId}`);
+    if (row.org_id !== principal.orgId) throw new PermissionError("command not in principal org");
+
+    const isOwner = row.owner_actor_id === principal.actorId;
+    const isAdmin =
+      principal.scopes.includes("grant:create") ||
+      (await this.hasGrant(principal, "grant:create", "org", principal.orgId)) ||
+      (row.channel_id
+        ? await this.hasGrant(principal, "channel:admin", "channel", row.channel_id)
+        : false);
+    if (!isOwner && !isAdmin) {
+      throw new PermissionError("must be command owner or admin to delete a command");
+    }
+
+    const event = await this.db.tx(async (tx) => {
+      await this.txQuery(
+        tx,
+        "UPDATE registered_commands SET status='disabled' WHERE id=?",
+        [commandId],
+      );
+      return this.emit(tx, {
+        orgId: principal.orgId,
+        eventType: "command.deleted",
+        payload: {
+          orgId: principal.orgId,
+          commandId,
+          name: row.name,
+          channelId: row.channel_id,
+          ownerActorId: row.owner_actor_id,
+          deletedByActorId: principal.actorId,
+        },
+      });
+    });
+    this.bus.publish(event);
   }
 
   // ── audit ────────────────────────────────────────────────────────────────

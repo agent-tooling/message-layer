@@ -280,6 +280,75 @@ See [authorization.md](./authorization.md) for semantics.
 - `GET /v1/permission-requests/:requestId` → `{ request: { status, action, resourceType, resourceId, context, createdAt, resolvedAt, grantId, ... } }`
 - `POST /v1/permission-requests/:requestId/resolve` — `{ approve, notes? }` → `{ ok: true }`
 
+## Command Registry
+
+Apps and agents register named slash commands. Each registration is gated by an admin approval
+(`command:register` permission request). Once approved the command is active and invocations
+resolve to the owning actor.
+
+**Namespacing**
+
+- Short form: `command: "deploy"` — resolved to the single active registration for that name in the
+  current channel/org scope. If two owners hold the same short name the invocation is rejected with
+  `VALIDATION`; callers must use the long form.
+- Long form: `command: "deploybot:deploy"` — always unambiguous; owner is looked up by
+  `display_name` in the same org.
+- Unregistered commands pass through with `commandId: null` (backward compatible).
+
+### `POST /v1/commands`
+
+Register a slash command. Creates a `pending` registration and opens a `command:register`
+permission request.
+
+**Request**
+| Field       | Type   | Required | Description |
+|-------------|--------|----------|-------------|
+| name        | string | yes      | Command name. Letters, digits, hyphens, and underscores only. |
+| description | string | no       | Human-readable description shown in the approval inbox. |
+| argsSchema  | object | no       | JSON schema hint for the expected `args` payload. |
+| channelId   | string | no       | When set, scopes the registration to a single channel. |
+
+**Response** `201` — `{ "commandId": "string", "requestId": "string" }`
+
+After receiving this response, the owning actor should poll `GET /v1/permission-requests?actorId=…`
+or subscribe to `command.registered` events to know when the admin approves.
+
+### `GET /v1/commands`
+
+List active commands visible to the caller's org.
+
+**Query parameters**
+| Parameter | Type   | Description |
+|-----------|--------|-------------|
+| channelId | string | When provided, includes channel-scoped commands for this channel alongside org-scoped ones. |
+
+**Response** `200`
+```json
+{
+  "commands": [
+    {
+      "id": "string",
+      "orgId": "string",
+      "channelId": "string | null",
+      "name": "string",
+      "ownerActorId": "string",
+      "description": "string | null",
+      "argsSchema": {},
+      "status": "active",
+      "permissionRequestId": "string | null",
+      "createdAt": "ISO-8601"
+    }
+  ]
+}
+```
+
+### `DELETE /v1/commands/:commandId`
+
+Disable a command. The command's status is set to `disabled` and it no longer appears in `GET
+/v1/commands`. Only the command owner or an admin (`grant:create` capability) may delete.
+
+**Response** `200` — `{ "ok": true }`
+
 ## Artifacts
 
 Artifacts are binary payloads scoped to a stream (channel or thread). Core

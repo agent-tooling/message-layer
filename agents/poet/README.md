@@ -1,12 +1,13 @@
 # Poet agent
 
-A tiny [Mastra](https://mastra.ai) agent that, once a minute, writes a short
-poem and posts it into `#poems` on the local message-layer instance.
+A tiny [Mastra](https://mastra.ai) poet agent that registers a `/poem` slash
+command and replies with a poem in a thread when invoked from the Next.js
+workspace.
 
 It exists to **exercise the permission flow** end-to-end: on first run the
-agent has zero scopes, so creating `#poems` and posting into it both
-return `{ denied, permissionRequestId }`. A human approves those requests
-in the Next.js workspace UI, and on the next tick the agent succeeds.
+agent has zero scopes, so joining as an agent and registering `/poem` both
+require admin approval in the Next.js workspace UI. Once approved, users can
+run `/poem` in a channel and receive the generated poem as a thread reply.
 
 ## Prerequisites
 
@@ -48,27 +49,23 @@ Any flag can also come from the environment — `MESSAGE_LAYER_ORG_ID`,
    `displayName="poet-agent"`, and **no** scopes. State is cached in
    `.data/poet-state.json` and reused on later boots when the stored
    actor is still live in the message-layer server.
-3. **Loop** (every `POET_INTERVAL_MS`, default 60000):
+3. **Register `/poem`** via `POST /v1/commands`, which opens a
+   `command:register` request for an admin to approve.
+4. **Loop** (every `POET_INTERVAL_MS`, default 60000):
    - Re-check Next.js health. Down → halt.
-   - `agent.generate(...)` with three tools available:
-     - `list_channels`  — discover channels.
-     - `create_channel` — attempt to create by name; surfaces the
-       permission request id on deny.
-     - `post_message`   — resolves name → id, posts, surfaces the
-       permission request id on deny (via `autoRequestOnDeny: true`).
-   - Every tool call, tool result, and the final model text is logged
-     to the terminal with timestamps.
+   - Poll channel subscription events.
+   - On `command.invoked` matching `/poem`, create a thread from the invoking
+     message and append a generated poem into that thread.
 
 ## Approving the agent's requests
 
-After the first denied tick, open the Next.js workspace → approval inbox.
-You'll see two pending requests:
+After startup, open the Next.js workspace → approval inbox. You'll see at
+least the `/poem` registration request:
 
-- `channel:create` on `org:<orgId>`
-- `message:append` on `channel:<poems-channel-id>` (only after `#poems` exists)
+- `command:register` on `org:<orgId>`
 
-Approve both. The agent's next tick will succeed and a poem will land in
-`#poems`.
+Depending on your grant model, you may also need to approve `thread:create`
+or `message:append` requests the first time the agent attempts a reply.
 
 ## Environment
 

@@ -123,6 +123,9 @@ export const eventTypes = [
   "message.appended",
   "mention.recorded",
   "command.invoked",
+  "command.registration_requested",
+  "command.registered",
+  "command.deleted",
   "message.redacted",
   "membership.updated",
   "cursor.updated",
@@ -192,3 +195,19 @@ export class NotFoundError extends Error {
     this.name = "NotFoundError";
   }
 }
+
+export type RegisteredCommandStatus = "pending" | "active" | "disabled";
+
+export type RegisteredCommand = {
+  id: string;
+  orgId: string;
+  /** null means org-scoped; non-null means scoped to this channel only. */
+  channelId: string | null;
+  name: string;
+  ownerActorId: string;
+  description: string | null;
+  argsSchema: Record<string, unknown>;
+  status: RegisteredCommandStatus;
+  permissionRequestId: string | null;
+  createdAt: string;
+};

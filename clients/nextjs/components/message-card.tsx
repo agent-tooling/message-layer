@@ -179,6 +179,33 @@ function MessagePartView({ part }: { part: MessagePart }) {
     return <p className="whitespace-pre-wrap text-sm leading-relaxed text-zinc-100">{text}</p>;
   }
 
+  if (part.type === "mention") {
+    const label = String(part.payload.label ?? "@mention");
+    const actorId =
+      typeof part.payload.actorId === "string" ? part.payload.actorId : "";
+    return (
+      <div className="inline-flex w-fit items-center gap-2 rounded-full border border-sky-700/60 bg-sky-900/30 px-3 py-1 text-xs text-sky-200">
+        <span>{label}</span>
+        {actorId ? (
+          <span className="text-sky-200/60">{actorId.slice(0, 8)}</span>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (part.type === "command") {
+    const command = String(part.payload.command ?? "command");
+    const args = part.payload.args ?? {};
+    return (
+      <div className="rounded-lg border border-indigo-800/70 bg-indigo-950/40 px-3 py-2 text-xs text-indigo-200">
+        <div className="font-semibold">/{command}</div>
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[11px] text-indigo-100/80">
+          {JSON.stringify(args, null, 2)}
+        </pre>
+      </div>
+    );
+  }
+
   if (part.type === "tool_call") {
     const toolName = String(part.payload.toolName ?? part.payload.name ?? "tool");
     return (

@@ -31,6 +31,8 @@ export type MlMessage = {
 };
 type MlPartType =
   | "text"
+  | "mention"
+  | "command"
   | "tool_call"
   | "tool_result"
   | "artifact"
@@ -277,6 +279,177 @@ export class MessageLayerClient {
       code: "unknown",
       message: b.error ?? `append failed: HTTP ${status}`,
     };
+  }
+
+  async createThread(
+    channelId: string,
+    parentMessageId: string,
+    visibility: "public" | "private" = "public",
+  ): Promise<
+    | { ok: true; threadId: string }
+    | { ok: false; code: "permission_denied" | "validation" | "not_found" | "unknown"; message: string; requestId?: string; capability?: string }
+  > {
+    const { status, body } = await this.call<{
+      threadId?: string;
+      error?: string;
+      capability?: string;
+      code?: string;
+      denied?: boolean;
+      requestId?: string;
+    }>("POST", "/v1/threads", {
+      channelId,
+      parentMessageId,
+      visibility,
+    });
+    const payload = body as {
+      threadId?: string;
+      error?: string;
+      capability?: string;
+      code?: string;
+      denied?: boolean;
+      requestId?: string;
+    };
+    if (status === 200 && typeof payload.threadId === "string") {
+      return { ok: true, threadId: payload.threadId };
+    }
+    if (status === 403) {
+      const capability = payload.capability ?? "thread:create";
+      const requestId = await this.openPermissionRequest(
+        capability,
+        "channel",
+        channelId,
+        {
+          kind: "thread.create",
+          tool: "poem_command_reply",
+          parentMessageId,
+          channelId,
+          requestedVisibility: visibility,
+        },
+      );
+      return {
+        ok: false,
+        code: "permission_denied",
+        message: payload.error ?? "permission denied",
+        capability,
+        requestId,
+      };
+    }
+    if (status === 404) {
+      return { ok: false, code: "not_found", message: payload.error ?? "channel or parent message not found" };
+    }
+    if (status === 400) {
+      return { ok: false, code: "validation", message: payload.error ?? "invalid request" };
+    }
+    return { ok: false, code: "unknown", message: payload.error ?? `create thread failed: HTTP ${status}` };
+  }
+
+  async registerCommand(input: {
+    name: string;
+    description?: string;
+    channelId?: string | null;
+    argsSchema?: Record<string, unknown>;
+  }): Promise<
+    | { ok: true; commandId: string; requestId: string }
+    | { ok: false; code: "validation" | "permission_denied" | "unknown"; message: string }
+  > {
+    const { status, body } = await this.call<{
+      commandId?: string;
+      requestId?: string;
+      error?: string;
+      code?: string;
+    }>("POST", "/v1/commands", {
+      name: input.name,
+      description: input.description ?? null,
+      channelId: input.channelId ?? null,
+      argsSchema: input.argsSchema ?? {},
+    });
+    const payload = body as {
+      commandId?: string;
+      requestId?: string;
+      error?: string;
+      code?: string;
+    };
+    if (
+      (status === 200 || status === 201) &&
+      typeof payload.commandId === "string" &&
+      typeof payload.requestId === "string"
+    ) {
+      return { ok: true, commandId: payload.commandId, requestId: payload.requestId };
+    }
+    if (status === 400) {
+      return { ok: false, code: "validation", message: payload.error ?? "invalid request" };
+    }
+    if (status === 403) {
+      return { ok: false, code: "permission_denied", message: payload.error ?? "permission denied" };
+    }
+    return { ok: false, code: "unknown", message: payload.error ?? `register command failed: HTTP ${status}` };
+  }
+
+  async listCommands(channelId?: string | null): Promise<
+    Array<{
+      id: string;
+      orgId: string;
+      channelId: string | null;
+      name: string;
+      ownerActorId: string;
+      description: string | null;
+      argsSchema: Record<string, unknown>;
+      status: "pending" | "active" | "disabled";
+      permissionRequestId: string | null;
+      createdAt: string;
+    }>
+  > {
+    const suffix = channelId ? `?channelId=${encodeURIComponent(channelId)}` : "";
+    const { status, body } = await this.call<{
+      commands: Array<{
+        id: string;
+        orgId: string;
+        channelId: string | null;
+        name: string;
+        ownerActorId: string;
+        description: string | null;
+        argsSchema: Record<string, unknown>;
+        status: "pending" | "active" | "disabled";
+        permissionRequestId: string | null;
+        createdAt: string;
+      }>;
+    }>("GET", `/v1/commands${suffix}`);
+    if (status !== 200) throw new Error(`listCommands failed ${status}: ${JSON.stringify(body)}`);
+    return (body as { commands: Array<any> }).commands;
+  }
+
+  async listMessages(streamId: string, afterSeq = 0): Promise<MlMessage[]> {
+    const { status, body } = await this.call<{ messages: MlMessage[] }>(
+      "GET",
+      `/v1/streams/${streamId}/messages?afterSeq=${afterSeq}&limit=50`,
+    );
+    if (status !== 200) throw new Error(`listMessages failed ${status}: ${JSON.stringify(body)}`);
+    return (body as { messages: MlMessage[] }).messages;
+  }
+
+  async listStreamEvents(
+    streamId: string,
+    fromSeq = 0,
+  ): Promise<
+    Array<{
+      id: string;
+      type: string;
+      streamSeq: number | null;
+      createdAt: string;
+      payload: Record<string, unknown>;
+    }>
+  > {
+    const { status, body } = await this.call<{
+      events: Array<{
+        id: string;
+        type: string;
+        streamSeq: number | null;
+        createdAt: string;
+        payload: Record<string, unknown>;
+      }>;
+    }>("GET", `/v1/streams/${streamId}/subscribe?fromSeq=${fromSeq}`);
+    if (status !== 200) throw new Error(`listStreamEvents failed ${status}: ${JSON.stringify(body)}`);
+    return (body as { events: Array<any> }).events;
   }
 
   async openPermissionRequest(
