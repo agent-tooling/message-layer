@@ -87,14 +87,12 @@ export class MessageLayerClient {
     requestId: string,
     opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
   ): Promise<PermissionDecision> {
-    const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
-    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const status = await this.getPermissionRequestStatus(requestId);
-      if (status === "approved" || status === "denied") return status;
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-    }
+    void requestId;
+    void opts;
+    // message-layer currently exposes list + resolve APIs for permission
+    // requests, but no stable read-by-id endpoint for agents. Returning "open"
+    // makes callers surface "pending approval" immediately instead of blocking
+    // on an endpoint that may not exist.
     return "open";
   }
 

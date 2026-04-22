@@ -10,6 +10,7 @@ const ORG_ID = args.orgId ?? process.env.MESSAGE_LAYER_ORG_ID ?? "";
 const INTERVAL_MS = Number(args.intervalMs ?? process.env.POET_INTERVAL_MS ?? "60000");
 const MODEL = args.model ?? process.env.POET_MODEL ?? "openai/gpt-4o-mini";
 const ONCE = args.once;
+const POEMS_CHANNEL_NAME = "poems";
 
 const colors = {
   reset: "\x1b[0m",
@@ -141,6 +142,30 @@ No intro sentence, no markdown fences.`,
 
     try {
       const channels = await scopedClient.listChannels();
+
+      // Autonomous behavior: post a fresh poem into #poems every tick.
+      const poemsChannelId = await ensurePoemsChannel(scopedClient, channels);
+      if (poemsChannelId) {
+        const periodicPoem = await generatePoemText(agent, "");
+        const periodicPost = await scopedClient.appendMessage({
+          streamId: poemsChannelId,
+          streamType: "channel",
+          text: periodicPoem,
+        });
+        if (periodicPost.ok) {
+          log(
+            "poems",
+            `${colors.green}posted periodic poem to #${POEMS_CHANNEL_NAME} (message ${periodicPost.messageId.slice(0, 8)})${colors.reset}`,
+          );
+        } else {
+          const reqHint = periodicPost.requestId ? ` request=${periodicPost.requestId}` : "";
+          log(
+            "poems",
+            `${colors.yellow}could not post periodic poem: ${periodicPost.message}${reqHint}${colors.reset}`,
+          );
+        }
+      }
+
       for (const channel of channels) {
         const fromSeq = lastSeqByChannel.get(channel.id) ?? 0;
         const events = await scopedClient.listStreamEvents(channel.id, fromSeq);
@@ -208,6 +233,22 @@ No intro sentence, no markdown fences.`,
     log("sleep", `${colors.dim}waiting ${INTERVAL_MS}ms${colors.reset}`);
     await sleep(INTERVAL_MS);
   }
+}
+
+async function ensurePoemsChannel(
+  client: MessageLayerClient,
+  channels: Array<{ id: string; name: string }>,
+): Promise<string | null> {
+  const existing = channels.find((channel) => channel.name === POEMS_CHANNEL_NAME);
+  if (existing) return existing.id;
+  const created = await client.createChannel(POEMS_CHANNEL_NAME, "public");
+  if (created.ok) return created.channelId;
+  const reqHint = created.requestId ? ` request=${created.requestId}` : "";
+  log(
+    "poems",
+    `${colors.yellow}could not create #${POEMS_CHANNEL_NAME}: ${created.message}${reqHint}${colors.reset}`,
+  );
+  return null;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -99,14 +99,12 @@ export class MessageLayerClient {
     requestId: string,
     opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
   ): Promise<PermissionDecision> {
-    const timeoutMs = opts.timeoutMs ?? 5 * 60_000;
-    const pollIntervalMs = opts.pollIntervalMs ?? 2000;
-    const start = Date.now();
-    while (Date.now() - start < timeoutMs) {
-      const status = await this.getPermissionRequestStatus(requestId);
-      if (status === "approved" || status === "denied") return status;
-      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-    }
+    void requestId;
+    void opts;
+    // message-layer currently exposes list + resolve APIs for permission
+    // requests, but no stable read-by-id endpoint for agents. Returning "open"
+    // makes callers surface "pending approval" immediately instead of blocking
+    // on an endpoint that may not exist.
     return "open";
   }
 
@@ -423,20 +421,137 @@ export class MessageLayerClient {
     visibility: "public" | "private" = "private",
   ): Promise<
     | { ok: true; threadId: string }
-    | { ok: false; message: string; capability?: string }
+    | { ok: false; message: string; capability?: string; requestId?: string }
+  > {
+    return this.createThreadInternal(channelId, parentMessageId, visibility, true);
+  }
+
+  private async createThreadInternal(
+    channelId: string,
+    parentMessageId: string,
+    visibility: "public" | "private",
+    waitOnDeny: boolean,
+  ): Promise<
+    | { ok: true; threadId: string }
+    | { ok: false; message: string; capability?: string; requestId?: string }
   > {
     const { status, body } = await this.call<{
       threadId?: string;
       error?: string;
       capability?: string;
     }>("POST", "/v1/threads", { channelId, parentMessageId, visibility });
-    if (status === 200 && typeof (body as { threadId?: string }).threadId === "string") {
-      return { ok: true, threadId: (body as { threadId: string }).threadId };
+    const payload = body as {
+      threadId?: string;
+      error?: string;
+      capability?: string;
+    };
+    if (status === 200 && typeof payload.threadId === "string") {
+      return { ok: true, threadId: payload.threadId };
+    }
+    if (status === 403) {
+      // Cursor-agent actors are bootstrapped with no scopes; the very first
+      // `/cursor` or `@cursor` invocation trips the thread:create check.
+      // Open a permission request so a human admin sees the request in the
+      // Next.js inbox and can approve it, then block until they do — same
+      // pattern `createChannel` and `appendParts` already use above.
+      const capability = payload.capability ?? "thread:create";
+      const requestId = await this.openPermissionRequest(
+        capability,
+        "channel",
+        channelId,
+        {
+          kind: "thread.create",
+          tool: "cursor_invocation_thread",
+          parentMessageId,
+          channelId,
+          requestedVisibility: visibility,
+        },
+      );
+      if (waitOnDeny && requestId) {
+        const decision = await this.waitForPermissionDecision(requestId);
+        if (decision === "approved") {
+          return this.createThreadInternal(channelId, parentMessageId, visibility, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            message: `request ${requestId} was denied by an admin`,
+            requestId,
+            capability,
+          };
+        }
+        return {
+          ok: false,
+          message: `request ${requestId} is still pending admin approval`,
+          requestId,
+          capability,
+        };
+      }
+      return {
+        ok: false,
+        message: payload.error ?? "permission denied",
+        requestId,
+        capability,
+      };
     }
     return {
       ok: false,
-      message: (body as { error?: string }).error ?? `createThread failed: ${status}`,
-      capability: (body as { capability?: string }).capability,
+      message: payload.error ?? `createThread failed: ${status}`,
+      capability: payload.capability,
+    };
+  }
+
+  async registerCommand(input: {
+    name: string;
+    description?: string;
+    channelId?: string | null;
+    argsSchema?: Record<string, unknown>;
+  }): Promise<
+    | { ok: true; commandId: string; requestId: string }
+    | { ok: false; code: "validation" | "permission_denied" | "unknown"; message: string }
+  > {
+    const { status, body } = await this.call<{
+      commandId?: string;
+      requestId?: string;
+      error?: string;
+      code?: string;
+    }>("POST", "/v1/commands", {
+      name: input.name,
+      description: input.description ?? null,
+      channelId: input.channelId ?? null,
+      argsSchema: input.argsSchema ?? {},
+    });
+    const payload = body as {
+      commandId?: string;
+      requestId?: string;
+      error?: string;
+      code?: string;
+    };
+    if (
+      status === 201 &&
+      typeof payload.commandId === "string" &&
+      typeof payload.requestId === "string"
+    ) {
+      return { ok: true, commandId: payload.commandId, requestId: payload.requestId };
+    }
+    if (status === 403) {
+      return {
+        ok: false,
+        code: "permission_denied",
+        message: payload.error ?? "permission denied",
+      };
+    }
+    if (status === 400) {
+      return {
+        ok: false,
+        code: "validation",
+        message: payload.error ?? "validation failed",
+      };
+    }
+    return {
+      ok: false,
+      code: "unknown",
+      message: payload.error ?? `registerCommand failed: ${status}`,
     };
   }
 

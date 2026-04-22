@@ -35,6 +35,27 @@ pnpm run dev
 agent-browser --session-name ml-team-v1 open http://127.0.0.1:3001
 ```
 
+## Clean reset before reruns
+
+When repeating the suite from scratch, clear process + local state first:
+
+```bash
+cd /Users/andre.landgraf/Workspaces/personal/agent-tooling/message-layer
+
+# Stop any previous dev servers
+lsof -nP -iTCP -sTCP:LISTEN | rg ":3000|:3001"
+# kill the listed node pids if present
+
+# Reset Next.js local app/auth DBs
+rm -f clients/nextjs/.data/team-client.db clients/nextjs/.data/better-auth.db
+
+# Reset agent cached join/state
+rm -f agents/poet/.data/*.json agents/assistant/.data/*.json agents/cursor/.data/*.json
+```
+
+Then restart `pnpm run dev` and `pnpm run client:nextjs` and begin at
+`01-auth-and-bootstrap.md`.
+
 ## Credentials used by smoke tests
 
 - Primary user: `owner+v1@example.com` / `ownerpass123`
@@ -51,6 +72,12 @@ Run in this order because later tests depend on data created in earlier ones:
 5. `05-agent-onboarding.md`
 6. `06-control-plane-sanity.md`
 7. `07-agent-approval-inbox.md`
+
+For agent scenarios in this repo, include at least:
+
+- approve join requests for `assistant-agent`, `poet-agent`, `cursor-agent`
+- approve command registration (`/poem`, `/cursor`)
+- approve first-use `thread:create` / `message:append` requests as prompted
 
 ## Completion bar
 

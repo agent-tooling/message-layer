@@ -569,6 +569,13 @@ export function createApp(service: MessageLayerService): Hono {
       // verify without parsing the body.
       const headers = new Headers({
         "content-type": metadata.contentType,
+        // Defence-in-depth: the artifact bytes are attacker-controlled plus the
+        // stored content-type came from the uploader. Force the browser to honour
+        // our declared type instead of sniffing the body into something
+        // executable (HTML, SVG-with-script, …) if the upstream uploader lied
+        // about the MIME. Paired with the `attachment` disposition below, this
+        // keeps downloads from ever being rendered in the server's origin.
+        "x-content-type-options": "nosniff",
         "content-disposition": `attachment; filename="${encodeFilename(metadata.filename)}"`,
         "x-artifact-id": metadata.id,
         "x-artifact-size": String(metadata.size),

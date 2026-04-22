@@ -4,6 +4,10 @@ A tiny [Mastra](https://mastra.ai) poet agent that registers a `/poem` slash
 command and replies with a poem in a thread when invoked from the Next.js
 workspace.
 
+Important: the current implementation does **not** auto-create `#poems` and
+does **not** post on a fixed schedule. The loop interval controls event polling
+cadence, not autonomous channel posting.
+
 It exists to **exercise the permission flow** end-to-end: on first run the
 agent has zero scopes, so joining as an agent and registering `/poem` both
 require admin approval in the Next.js workspace UI. Once approved, users can
@@ -65,7 +69,12 @@ least the `/poem` registration request:
 - `command:register` on `org:<orgId>`
 
 Depending on your grant model, you may also need to approve `thread:create`
-or `message:append` requests the first time the agent attempts a reply.
+and `message:append` requests the first time the agent attempts a reply.
+In practice, approve in this order for the smoothest first run:
+
+1. `command:register` for `/poem`
+2. `thread:create` (channel-scoped)
+3. `message:append` (thread-scoped)
 
 ## Environment
 
@@ -84,6 +93,9 @@ standard ports.
 - **`Incorrect API key provided`** → Mastra logs the full upstream error
   before the agent catches it. Set a real `OPENAI_API_KEY` and the noise
   disappears.
+- **`could not reply: missing thread:create`** or **`append denied`** →
+  open the workspace approval inbox and approve the pending poet requests
+  (`thread:create`, then `message:append`).
 
 ## Why the Next.js health gate?
 

@@ -74,9 +74,23 @@ Do not respond if the message is clearly just from yourself or empty.`,
 }
 
 function extractToolName(value: unknown): string {
-  const record = value as { payload?: { toolName?: unknown; name?: unknown }; toolName?: unknown; name?: unknown };
-  const raw = record.payload?.toolName ?? record.payload?.name ?? record.toolName ?? record.name;
+  const record = value as {
+    payload?: { toolName?: unknown; name?: unknown; id?: unknown; tool?: unknown };
+    toolName?: unknown;
+    name?: unknown;
+    id?: unknown;
+    tool?: unknown;
+  };
+  const raw = record.payload?.toolName ?? record.payload?.name ?? record.payload?.id ?? record.payload?.tool ?? record.toolName ?? record.name ?? record.id ?? record.tool;
   return typeof raw === "string" && raw.trim().length > 0 ? raw : "tool";
+}
+
+function normalizeToolName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function isPostMessageCall(value: unknown): boolean {
+  return normalizeToolName(extractToolName(value)) === "postmessage";
 }
 
 function extractToolArgs(value: unknown): unknown {
@@ -123,7 +137,7 @@ async function publishAgentTrace(
   const toolCalls = Array.isArray(responseRecord.toolCalls) ? responseRecord.toolCalls : [];
   const toolResults = Array.isArray(responseRecord.toolResults) ? responseRecord.toolResults : [];
 
-  const hasPostMessageCall = toolCalls.some((call) => extractToolName(call) === "post_message");
+  const hasPostMessageCall = toolCalls.some((call) => isPostMessageCall(call));
   if (hasPostMessageCall) {
     // post_message now embeds tool_call details directly in the posted message parts
     return;

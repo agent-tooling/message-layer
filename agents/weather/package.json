@@ -1,0 +1,23 @@
+{
+  "name": "weather-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Weather command agent that replies with a generative UI weather card.",
+  "scripts": {
+    "start": "tsx --env-file-if-exists=.env src/weather.ts",
+    "once": "tsx --env-file-if-exists=.env src/weather.ts --once",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.16.5",
+    "tsx": "4.20.3",
+    "typescript": "5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

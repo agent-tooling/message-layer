@@ -99,11 +99,20 @@ const roleScopes: Record<UserRole, string[]> = {
   member: [],
 };
 
+// Slash commands (`/poem`, `/cursor …`) are a baseline chat-UX feature, not
+// an admin-gated power. Every role gets `command:invoke` on channels and
+// threads so typing `/foo` never lands in the permission-request inbox for
+// routine use. Per-command policy (who can invoke which command) still
+// flows through the command-owner's registration + approval; this grant
+// only unlocks the generic "may append a message that contains a command
+// part" check in the service.
 const roleTemplates: Record<UserRole, RoleGrantTemplate[]> = {
   owner: [
     { capability: "message:append", resourceType: "channel", resourceId: null },
     { capability: "message:append", resourceType: "thread", resourceId: null },
     { capability: "thread:create", resourceType: "channel", resourceId: null },
+    { capability: "command:invoke", resourceType: "channel", resourceId: null },
+    { capability: "command:invoke", resourceType: "thread", resourceId: null },
     { capability: "channel:create", resourceType: "org", resourceId: orgPlaceholder },
     { capability: "grant:create", resourceType: "org", resourceId: orgPlaceholder },
     { capability: "channel:admin", resourceType: "channel", resourceId: null },
@@ -112,6 +121,8 @@ const roleTemplates: Record<UserRole, RoleGrantTemplate[]> = {
     { capability: "message:append", resourceType: "channel", resourceId: null },
     { capability: "message:append", resourceType: "thread", resourceId: null },
     { capability: "thread:create", resourceType: "channel", resourceId: null },
+    { capability: "command:invoke", resourceType: "channel", resourceId: null },
+    { capability: "command:invoke", resourceType: "thread", resourceId: null },
     { capability: "channel:create", resourceType: "org", resourceId: orgPlaceholder },
     { capability: "grant:create", resourceType: "org", resourceId: orgPlaceholder },
     { capability: "channel:admin", resourceType: "channel", resourceId: null },
@@ -120,6 +131,8 @@ const roleTemplates: Record<UserRole, RoleGrantTemplate[]> = {
     { capability: "message:append", resourceType: "channel", resourceId: null },
     { capability: "message:append", resourceType: "thread", resourceId: null },
     { capability: "thread:create", resourceType: "channel", resourceId: null },
+    { capability: "command:invoke", resourceType: "channel", resourceId: null },
+    { capability: "command:invoke", resourceType: "thread", resourceId: null },
   ],
 };
 

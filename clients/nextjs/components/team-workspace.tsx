@@ -576,33 +576,6 @@ export function TeamWorkspace() {
     }
   }
 
-  async function askCursorFromMessage(parentMessageId: string) {
-    if (!activeChannelId) return;
-    const prompt = window
-      .prompt("What should Cursor help with?", "Please help me with this discussion.")
-      ?.trim();
-    if (prompt === undefined) return;
-    if (!prompt) return;
-    try {
-      const result = await api<{ threadId: string; invocationMessageId: string }>(
-        "/api/team/cursor/invoke",
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            channelId: activeChannelId,
-            parentMessageId,
-            instruction: prompt,
-          }),
-        },
-      );
-      await refreshThreads(activeChannelId);
-      setActiveThreadId(result.threadId);
-    } catch (err) {
-      setError((err as Error).message);
-    }
-  }
-
   function openThread(threadId: string) {
     setActiveThreadId(threadId);
   }
@@ -1047,7 +1020,6 @@ export function TeamWorkspace() {
               activeThreadId={activeThreadId}
               onCreateThread={createThreadFromMessage}
               onOpenThread={openThread}
-              onAskCursor={askCursorFromMessage}
             />
           ))}
         </div>

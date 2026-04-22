@@ -3,6 +3,11 @@ import { z } from "zod";
 import { PermissionError, ValidationError, eventTypeSchema, principalSchema, type DomainEvent, type EventType, type Principal } from "../types.js";
 import { isWebhookSupportedEventType } from "../event-support.js";
 import type { ServerPlugin } from "../plugins.js";
+import {
+  assertWebhookEndpointSafe,
+  BlockedEndpointError,
+  type WebhookEndpointCheckOptions,
+} from "./webhook-ssrf-guard.js";
 
 type WebhookSubscriptionRow = {
   id: string;
@@ -93,6 +98,12 @@ function errorResponse(error: unknown): Response {
       headers: { "content-type": "application/json" },
     });
   }
+  if (error instanceof BlockedEndpointError) {
+    return new Response(
+      JSON.stringify({ error: error.message, code: error.code, reason: error.reason }),
+      { status: 400, headers: { "content-type": "application/json" } },
+    );
+  }
   if (error instanceof ValidationError || error instanceof z.ZodError) {
     return new Response(JSON.stringify({ error: "invalid request", code: "VALIDATION" }), {
       status: 400,
@@ -115,6 +126,20 @@ export function webhookPlugin(options?: Record<string, unknown>): ServerPlugin {
   const mountPath = typeof options?.mountPath === "string" ? options.mountPath : "/v1/webhooks";
   const timeoutMs = Number(options?.timeoutMs ?? 5000);
   const defaultSecret = typeof options?.defaultSecret === "string" ? options.defaultSecret : null;
+  // SSRF guard: by default we refuse to dispatch to loopback / RFC1918 /
+  // link-local / cloud-metadata addresses so that a stolen `webhook:subscribe`
+  // scope cannot be turned into "read arbitrary internal HTTP". Deployments
+  // that really need in-cluster hooks opt in explicitly.
+  const allowPrivateNetworks = options?.allowPrivateNetworks === true;
+  // Tests override the resolver via `options.lookup`; production always uses
+  // the system resolver so `/etc/hosts`, split-horizon DNS, etc. apply.
+  const lookup = typeof options?.lookup === "function"
+    ? (options.lookup as WebhookEndpointCheckOptions["lookup"])
+    : undefined;
+  const endpointCheckOptions: WebhookEndpointCheckOptions = {
+    allowPrivateNetworks,
+    lookup,
+  };
 
   return {
     name: "webhooks",
@@ -166,6 +191,10 @@ export function webhookPlugin(options?: Record<string, unknown>): ServerPlugin {
             throw new PermissionError("missing webhook:subscribe");
           }
           const body = createSubscriptionBody.parse(await c.req.json());
+          // Fail fast with a clear 400 before the row is even inserted —
+          // an attacker that probes many endpoints shouldn't be able to
+          // pollute `webhook_subscriptions` with blocked URLs.
+          await assertWebhookEndpointSafe(body.endpoint, endpointCheckOptions);
           if (body.streamId) {
             await ctx.service.assertCanReadStream(principal, body.streamId);
           }
@@ -301,6 +330,14 @@ export function webhookPlugin(options?: Record<string, unknown>): ServerPlugin {
           headers["x-message-layer-signature"] = createHmac("sha256", sub.secret).update(body).digest("hex");
         }
         try {
+          // Re-check every delivery: DNS records may have changed since the
+          // subscription was created (the classic DNS-rebinding angle) and
+          // the plugin may have been reconfigured to a stricter policy. We
+          // still have a small TOCTOU window between this resolve and the
+          // socket connect inside `fetch`, but the check closes the main
+          // hole (subscribe-then-exfiltrate) without requiring a bespoke
+          // connection dispatcher.
+          await assertWebhookEndpointSafe(sub.endpoint, endpointCheckOptions);
           const response = await fetch(sub.endpoint, {
             method: "POST",
             headers,
@@ -311,7 +348,11 @@ export function webhookPlugin(options?: Record<string, unknown>): ServerPlugin {
           responseBody = await response.text();
           success = response.ok;
         } catch (error) {
-          errorMessage = error instanceof Error ? error.message : String(error);
+          if (error instanceof BlockedEndpointError) {
+            errorMessage = `${error.code}: ${error.message}`;
+          } else {
+            errorMessage = error instanceof Error ? error.message : String(error);
+          }
         }
         await ctx.db.query(
           `INSERT INTO webhook_deliveries(

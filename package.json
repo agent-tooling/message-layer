@@ -91,7 +91,9 @@
     "agent:assistant": "pnpm --dir agents/assistant run start",
     "agent:assistant:once": "pnpm --dir agents/assistant run once",
     "agent:cursor": "pnpm --dir agents/cursor run start",
-    "agent:cursor:once": "pnpm --dir agents/cursor run once"
+    "agent:cursor:once": "pnpm --dir agents/cursor run once",
+    "agent:weather": "pnpm --dir agents/weather run start",
+    "agent:weather:once": "pnpm --dir agents/weather run once"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1030.0",

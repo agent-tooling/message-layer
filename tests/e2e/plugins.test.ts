@@ -161,7 +161,15 @@ describe("built-in plugins", () => {
   });
 
   test("webhooks plugin stores subscriptions and delivers matching events", async () => {
-    harness = await makeHarness(["webhooks"]);
+    // Inject a deterministic DNS resolver so the SSRF guard does not hit
+    // real DNS for `example.com` on every delivery — keeps the test
+    // hermetic and deterministic in offline CI environments.
+    harness = await makeHarness([
+      {
+        name: "webhooks",
+        options: { lookup: async () => [{ address: "93.184.216.34", family: 4 }] },
+      },
+    ]);
     const orgId = await harness.service.createOrg("hooks");
     const adminId = await harness.service.createActor(orgId, "human", "admin");
     const admin: Principal = {
@@ -205,7 +213,11 @@ describe("built-in plugins", () => {
         parts: [{ type: "text", payload: { text: "hello hook" } }],
         idempotencyKey: "hook-1",
       });
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      // One microtask was enough when the delivery path was a single
+      // `fetch` call, but the SSRF guard now awaits a DNS lookup (even
+      // when the lookup function is synchronous it still yields a
+      // microtask via `async`). Give it a small real-time window.
+      await new Promise((resolve) => setTimeout(resolve, 20));
       expect(deliveries.length).toBeGreaterThan(0);
       expect(deliveries[0]?.url).toBe("https://example.com/hooks/messages");
     } finally {
