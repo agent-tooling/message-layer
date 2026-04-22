@@ -89,9 +89,25 @@ async function main(): Promise<void> {
       const channels = await scopedClient.listChannels();
       for (const channel of channels) {
         const streamIds = [channel.id];
+        const streamMeta = new Map<
+          string,
+          { streamType: "channel" | "thread"; channelId: string; visibility: "public" | "private" }
+        >();
+        streamMeta.set(channel.id, {
+          streamType: "channel",
+          channelId: channel.id,
+          visibility: channel.visibility,
+        });
         try {
           const threads = await scopedClient.listThreads(channel.id);
-          for (const thread of threads) streamIds.push(thread.id);
+          for (const thread of threads) {
+            streamIds.push(thread.id);
+            streamMeta.set(thread.id, {
+              streamType: "thread",
+              channelId: channel.id,
+              visibility: channel.visibility,
+            });
+          }
         } catch (error) {
           console.log(
             `[weather] could not list threads for #${channel.name}: ${error instanceof Error ? error.message : String(error)}`,
@@ -101,55 +117,108 @@ async function main(): Promise<void> {
           const fromSeq = lastSeqByStream.get(streamId) ?? 0;
           const events = await scopedClient.listStreamEvents(streamId, fromSeq);
           let maxSeq = fromSeq;
+          const meta = streamMeta.get(streamId);
           for (const event of events) {
             if (typeof event.streamSeq === "number") maxSeq = Math.max(maxSeq, event.streamSeq);
-            if (event.type !== "command.invoked") continue;
-            const command = typeof event.payload.command === "string" ? event.payload.command : "";
-            if (!isWeatherCommand(command)) continue;
-            const ownerActorId = typeof event.payload.ownerActorId === "string" ? event.payload.ownerActorId : null;
-            if (ownerActorId && ownerActorId !== principal.actorId) continue;
-
             const messageId = typeof event.payload.messageId === "string" ? event.payload.messageId : "";
-            const partIndex = typeof event.payload.partIndex === "number" ? event.payload.partIndex : -1;
-            const streamType = event.payload.streamType === "thread" ? "thread" : "channel";
             const eventStreamId = typeof event.payload.streamId === "string" ? event.payload.streamId : streamId;
-            if (!messageId || partIndex < 0) continue;
+            if (!messageId) continue;
 
-            const key = `${messageId}:${partIndex}`;
-            if (seenInvocationKeys.has(key)) continue;
-            seenInvocationKeys.add(key);
+            if (event.type === "command.invoked") {
+              const command = typeof event.payload.command === "string" ? event.payload.command : "";
+              if (!isWeatherCommand(command)) continue;
+              const ownerActorId = typeof event.payload.ownerActorId === "string" ? event.payload.ownerActorId : null;
+              if (ownerActorId && ownerActorId !== principal.actorId) continue;
+              const partIndex = typeof event.payload.partIndex === "number" ? event.payload.partIndex : -1;
+              if (partIndex < 0) continue;
 
-            const parsedArgs = await resolveWeatherArgs({
-              client: scopedClient,
-              streamId: eventStreamId,
-              messageId,
-              streamSeq:
-                typeof event.payload.streamSeq === "number" ? event.payload.streamSeq : event.streamSeq ?? 0,
-              partIndex,
-            });
-            const snapshot = buildWeatherSnapshot(parsedArgs);
+              const key = `command:${messageId}:${partIndex}`;
+              if (seenInvocationKeys.has(key)) continue;
+              seenInvocationKeys.add(key);
 
-            const result = await postWeatherReply({
-              client: scopedClient,
-              streamType,
-              channelId: channel.id,
-              parentMessageId: messageId,
-              targetThreadId: streamType === "thread" ? eventStreamId : null,
-              snapshot,
-            });
-            if (result.ok) {
-              console.log(`[weather] replied to /${command} with weather card (message ${result.messageId})`);
-            } else {
-              console.log(
-                `[weather] could not reply to /${command}: ${result.message}${result.requestId ? ` request=${result.requestId}` : ""}`,
-              );
-              if (
-                result.requestId &&
-                result.message.includes("still pending admin approval")
-              ) {
-                // Keep invocation eligible for retry after approval.
-                seenInvocationKeys.delete(key);
+              const parsedArgs = await resolveWeatherArgs({
+                client: scopedClient,
+                streamId: eventStreamId,
+                messageId,
+                streamSeq:
+                  typeof event.payload.streamSeq === "number" ? event.payload.streamSeq : event.streamSeq ?? 0,
+                partIndex,
+              });
+              const snapshot = buildWeatherSnapshot(parsedArgs);
+
+              const streamType = event.payload.streamType === "thread" ? "thread" : "channel";
+              const result = await postWeatherReply({
+                client: scopedClient,
+                streamType,
+                channelId: channel.id,
+                parentMessageId: messageId,
+                targetThreadId: streamType === "thread" ? eventStreamId : null,
+                snapshot,
+              });
+              if (result.ok) {
+                console.log(`[weather] replied to /${command} with weather card (message ${result.messageId})`);
+              } else {
+                console.log(
+                  `[weather] could not reply to /${command}: ${result.message}${result.requestId ? ` request=${result.requestId}` : ""}`,
+                );
+                if (result.requestId && result.message.includes("still pending admin approval")) {
+                  seenInvocationKeys.delete(key);
+                }
               }
+              continue;
+            }
+
+            if (event.type === "mention.recorded") {
+              const mentionedActorId = typeof event.payload.mentionedActorId === "string" ? event.payload.mentionedActorId : null;
+              if (mentionedActorId !== principal.actorId) continue;
+              const authorActorId = typeof event.payload.actorId === "string" ? event.payload.actorId : "";
+              if (authorActorId === principal.actorId) continue;
+              const key = `mention:${messageId}`;
+              if (seenInvocationKeys.has(key)) continue;
+              seenInvocationKeys.add(key);
+
+              const parsedArgs = await resolveWeatherArgsFromMessageText({
+                client: scopedClient,
+                streamId: eventStreamId,
+                messageId,
+                streamSeq:
+                  typeof event.payload.streamSeq === "number" ? event.payload.streamSeq : event.streamSeq ?? 0,
+              });
+              const snapshot = buildWeatherSnapshot(parsedArgs);
+              const streamType = event.payload.streamType === "thread" ? "thread" : "channel";
+              const result = await postWeatherReply({
+                client: scopedClient,
+                streamType,
+                channelId: channel.id,
+                parentMessageId: messageId,
+                targetThreadId: streamType === "thread" ? eventStreamId : null,
+                snapshot,
+              });
+              if (!result.ok && result.requestId) seenInvocationKeys.delete(key);
+              continue;
+            }
+
+            if (event.type === "message.appended" && meta?.visibility === "private") {
+              const authorActorId = typeof event.payload.actorId === "string" ? event.payload.actorId : "";
+              if (authorActorId === principal.actorId) continue;
+              const key = `dm:${messageId}`;
+              if (seenInvocationKeys.has(key)) continue;
+              seenInvocationKeys.add(key);
+              const parsedArgs = await resolveWeatherArgsFromMessageText({
+                client: scopedClient,
+                streamId: eventStreamId,
+                messageId,
+                streamSeq:
+                  typeof event.payload.streamSeq === "number" ? event.payload.streamSeq : event.streamSeq ?? 0,
+              });
+              const snapshot = buildWeatherSnapshot(parsedArgs);
+              const result = await postWeatherDirectReply({
+                client: scopedClient,
+                streamId: eventStreamId,
+                streamType: meta.streamType,
+                snapshot,
+              });
+              if (!result.ok && result.requestId) seenInvocationKeys.delete(key);
             }
           }
           lastSeqByStream.set(streamId, maxSeq);
@@ -194,6 +263,31 @@ async function resolveWeatherArgs(input: {
   const candidateUnit = typeof (args as { unit?: unknown }).unit === "string" ? (args as { unit: string }).unit : "";
   const city = candidateCity.trim().length > 0 ? candidateCity.trim() : fallback.city;
   const unit: "c" | "f" = candidateUnit.toLowerCase() === "f" ? "f" : "c";
+  return { city, unit };
+}
+
+async function resolveWeatherArgsFromMessageText(input: {
+  client: MessageLayerClient;
+  streamId: string;
+  messageId: string;
+  streamSeq: number;
+}): Promise<WeatherArgs> {
+  const fallback: WeatherArgs = { city: "San Francisco", unit: "c" };
+  const messages = await input.client.listMessages(input.streamId, Math.max(0, input.streamSeq - 1));
+  const message = messages.find((m) => m.id === input.messageId);
+  if (!message) return fallback;
+  const fullText = message.parts
+    .filter((part) => part.type === "text")
+    .map((part) => {
+      const value = part.payload.text;
+      return typeof value === "string" ? value : "";
+    })
+    .join(" ")
+    .trim();
+  if (!fullText) return fallback;
+  const cityMatch = fullText.match(/\bin\s+([A-Za-z][A-Za-z\s-]{1,40})/i);
+  const city = cityMatch?.[1]?.trim() || fallback.city;
+  const unit: "c" | "f" = /\b(f|fahrenheit)\b/i.test(fullText) ? "f" : "c";
   return { city, unit };
 }
 
@@ -372,6 +466,38 @@ async function postWeatherReply(input: {
   const appended = await input.client.appendParts({
     streamId: threadId,
     streamType: "thread",
+    parts: [
+      { type: "text", payload: { text } },
+      {
+        type: "ui",
+        payload: {
+          catalog: "shadcn",
+          spec: createWeatherUiSpec(input.snapshot),
+        },
+      },
+    ],
+  });
+  if (!appended.ok) {
+    return { ok: false, message: appended.message, requestId: appended.requestId };
+  }
+  return { ok: true, messageId: appended.messageId };
+}
+
+async function postWeatherDirectReply(input: {
+  client: MessageLayerClient;
+  streamId: string;
+  streamType: "channel" | "thread";
+  snapshot: WeatherSnapshot;
+}): Promise<
+  | { ok: true; messageId: string }
+  | { ok: false; message: string; requestId?: string }
+> {
+  const condition = conditionLabel(input.snapshot.condition);
+  const unitSuffix = input.snapshot.unit === "c" ? "C" : "F";
+  const text = `Weather for ${input.snapshot.city}: ${input.snapshot.temperature}°${unitSuffix}, ${condition.toLowerCase()}, humidity ${input.snapshot.humidity}%.`;
+  const appended = await input.client.appendParts({
+    streamId: input.streamId,
+    streamType: input.streamType,
     parts: [
       { type: "text", payload: { text } },
       {

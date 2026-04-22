@@ -22,6 +22,11 @@ type MentionCandidate = {
   end: number;
 };
 
+type MentionAlias = {
+  actorId: string;
+  alias: string;
+};
+
 /**
  * Parse a composer input into first-class message parts. The text part is
  * always included when non-empty; command and mention parts are inferred.
@@ -124,7 +129,75 @@ function parseMentions(text: string, actors: ActorSuggestion[]): MentionCandidat
       from = end;
     }
   }
+
+  const aliases = buildMentionAliases(actors);
+  const mentionTokenRegex = /(^|\s)@([a-zA-Z0-9_.-]+)/g;
+  for (const match of text.matchAll(mentionTokenRegex)) {
+    const token = (match[2] ?? "").toLowerCase();
+    if (!token) continue;
+    const full = match[0] ?? "";
+    const atOffset = full.lastIndexOf("@");
+    if (atOffset < 0) continue;
+    const start = (match.index ?? 0) + atOffset;
+    const end = start + token.length + 1;
+    if (rangeOverlapsClaimed(claimed, start, end)) continue;
+    const actorId = resolveMentionToken(token, aliases);
+    if (!actorId) continue;
+    out.push({
+      actorId,
+      label: text.slice(start, end),
+      start,
+      end,
+    });
+    markClaimed(claimed, start, end);
+  }
+
   return out.sort((a, b) => a.start - b.start);
+}
+
+function normalizeMentionAlias(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^a-z0-9_.-]/g, "");
+}
+
+function buildMentionAliases(actors: ActorSuggestion[]): MentionAlias[] {
+  const out: MentionAlias[] = [];
+  const seen = new Set<string>();
+  for (const actor of actors) {
+    const canonical = normalizeMentionAlias(actor.displayName);
+    if (!canonical) continue;
+    const aliases = new Set<string>([canonical]);
+    aliases.add(canonical.replace(/-agent$/, ""));
+    aliases.add(canonical.replace(/_agent$/, ""));
+    for (const alias of aliases) {
+      if (!alias) continue;
+      const key = `${actor.actorId}:${alias}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ actorId: actor.actorId, alias });
+    }
+  }
+  return out;
+}
+
+function resolveMentionToken(token: string, aliases: MentionAlias[]): string | null {
+  const matches = aliases.filter((entry) => entry.alias === token);
+  if (matches.length === 1) return matches[0].actorId;
+  return null;
+}
+
+function rangeOverlapsClaimed(claimed: Set<number>, start: number, end: number): boolean {
+  for (let i = start; i < end; i += 1) {
+    if (claimed.has(i)) return true;
+  }
+  return false;
+}
+
+function markClaimed(claimed: Set<number>, start: number, end: number): void {
+  for (let i = start; i < end; i += 1) claimed.add(i);
 }
 
 function parseSlashCommand(

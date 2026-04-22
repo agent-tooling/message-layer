@@ -512,8 +512,12 @@ export async function listCommands(
   return payload.commands;
 }
 
-export async function createChannel(principal: MlPrincipal, name: string): Promise<string> {
-  const { channelId } = await mlClient(principal).createChannel(name, "public");
+export async function createChannel(
+  principal: MlPrincipal,
+  name: string,
+  visibility: "public" | "private" = "public",
+): Promise<string> {
+  const { channelId } = await mlClient(principal).createChannel(name, visibility);
   return channelId;
 }
 
@@ -527,6 +531,21 @@ export async function createPermissionRequest(
 ): Promise<string> {
   const { requestId } = await mlClient(principal).createPermissionRequest(input);
   return requestId;
+}
+
+export async function getPermissionRequest(
+  principal: MlPrincipal,
+  requestId: string,
+): Promise<PermissionRequest | null> {
+  return mlClient(principal).getPermissionRequest(requestId);
+}
+
+export async function createGrant(
+  principal: MlPrincipal,
+  input: CreateGrantInput,
+): Promise<string> {
+  const { grantId } = await mlClient(principal).createGrant(input);
+  return grantId;
 }
 
 export async function listThreads(
@@ -558,7 +577,7 @@ export async function resolvePermissionRequest(
   requestId: string,
   approve: boolean,
   options: ResolveOptions = {},
-): Promise<void> {
+): ReturnType<MessageLayerClient["resolvePermissionRequest"]> {
   return mlClient(principal).resolvePermissionRequest(requestId, approve, options);
 }
 

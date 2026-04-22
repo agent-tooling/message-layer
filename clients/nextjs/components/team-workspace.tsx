@@ -35,6 +35,11 @@ type Member = {
   appRole: "owner" | "admin" | "member" | null;
   effectiveCapabilities: string[];
 };
+type ChannelMember = {
+  actorId: string;
+  role: string;
+  createdAt: string;
+};
 type Attachment = {
   id: string;
   name: string;
@@ -92,6 +97,7 @@ export function TeamWorkspace() {
   const { data: session } = authClient.useSession();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
+  const [channelMembers, setChannelMembers] = useState<ChannelMember[]>([]);
   const [actors, setActors] = useState<ActorRow[]>([]);
   const [activeChannelId, setActiveChannelId] = useState<string>("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -99,6 +105,14 @@ export function TeamWorkspace() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "member">("member");
   const [newChannelName, setNewChannelName] = useState("");
+  const [newChannelVisibility, setNewChannelVisibility] = useState<
+    "public" | "private"
+  >("public");
+  const [dmTargetActorId, setDmTargetActorId] = useState("");
+  const [privateHumanActorId, setPrivateHumanActorId] = useState("");
+  const [privateAgentActorId, setPrivateAgentActorId] = useState("");
+  const [privateAppActorId, setPrivateAppActorId] = useState("");
+  const [isPrivateSettingsOpen, setIsPrivateSettingsOpen] = useState(false);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [threadsByChannel, setThreadsByChannel] = useState<
     Record<string, Thread[]>
@@ -121,6 +135,9 @@ export function TeamWorkspace() {
   const [error, setError] = useState<string | null>(null);
 
   const activeThreads = threadsByChannel[activeChannelId] ?? [];
+  const activeChannel =
+    channels.find((channel) => channel.id === activeChannelId) ?? null;
+  const isActivePrivateChannel = activeChannel?.visibility === "private";
 
   const threadsByParentMessage = useMemo(() => {
     const map: Record<string, Thread[]> = {};
@@ -177,6 +194,10 @@ export function TeamWorkspace() {
     () => members.filter((member) => member.actorType === "human"),
     [members],
   );
+  const dmCandidates = useMemo(
+    () => members.filter((member) => member.actorId !== currentActorId),
+    [members, currentActorId],
+  );
   const currentUserRole = useMemo(() => {
     const row = humanMembers.find((member) => member.actorId === currentActorId);
     return row?.appRole ?? null;
@@ -213,6 +234,34 @@ export function TeamWorkspace() {
       .filter((cmd) => (q.length === 0 ? true : cmd.name.toLowerCase().includes(q)))
       .slice(0, 8);
   }, [commandSuggestions, commandQuery]);
+  const channelMemberActorIds = useMemo(
+    () => new Set(channelMembers.map((member) => member.actorId)),
+    [channelMembers],
+  );
+  const availablePrivateHumans = useMemo(
+    () =>
+      actors.filter(
+        (actor) =>
+          actor.actorType === "human" && !channelMemberActorIds.has(actor.actorId),
+      ),
+    [actors, channelMemberActorIds],
+  );
+  const availablePrivateAgents = useMemo(
+    () =>
+      actors.filter(
+        (actor) =>
+          actor.actorType === "agent" && !channelMemberActorIds.has(actor.actorId),
+      ),
+    [actors, channelMemberActorIds],
+  );
+  const availablePrivateApps = useMemo(
+    () =>
+      actors.filter(
+        (actor) =>
+          actor.actorType === "app" && !channelMemberActorIds.has(actor.actorId),
+      ),
+    [actors, channelMemberActorIds],
+  );
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(path, { ...init, cache: "no-store" });
@@ -277,6 +326,13 @@ export function TeamWorkspace() {
       `/api/team/commands?channelId=${encodeURIComponent(channelId)}`,
     );
     setCommands(result.commands);
+  }
+
+  async function refreshChannelMembers(channelId: string) {
+    const result = await api<{ members: ChannelMember[] }>(
+      `/api/team/channels/${channelId}/members`,
+    );
+    setChannelMembers(result.members);
   }
 
   async function refreshMemory(channelId: string) {
@@ -358,6 +414,9 @@ export function TeamWorkspace() {
     void refreshCommands(activeChannelId).catch((err) =>
       setError((err as Error).message),
     );
+    void refreshChannelMembers(activeChannelId).catch(() => {
+      // channel member listing is optional for restricted channels
+    });
     void refreshMemory(activeChannelId).catch(() => {
       // memory plugin is optional
     });
@@ -368,10 +427,20 @@ export function TeamWorkspace() {
       void refreshDirectory().catch(() => {});
       void refreshWebhooks().catch(() => {});
       void refreshCommands(activeChannelId).catch(() => {});
+      void refreshChannelMembers(activeChannelId).catch(() => {});
       void refreshMemory(activeChannelId).catch(() => {});
     }, 2200);
     return () => clearInterval(timer);
   }, [activeChannelId]);
+
+  useEffect(() => {
+    if (isActivePrivateChannel) return;
+    setPrivateHumanActorId("");
+    setPrivateAgentActorId("");
+    setPrivateAppActorId("");
+    setIsPrivateSettingsOpen(false);
+    setChannelMembers([]);
+  }, [isActivePrivateChannel]);
 
   useEffect(() => {
     if (!searchOpen) return;
@@ -501,7 +570,10 @@ export function TeamWorkspace() {
       const response = await fetch("/api/team/channels", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({
+          name,
+          visibility: newChannelVisibility,
+        }),
         cache: "no-store",
       });
       const payload = (await response.json()) as {
@@ -521,8 +593,89 @@ export function TeamWorkspace() {
         throw new Error("channel creation did not return a channel id");
       }
       setNewChannelName("");
+      setNewChannelVisibility("public");
       await refreshDirectory();
       setActiveChannelId(payload.channelId);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function startDirectMessage() {
+    const targetActorId = dmTargetActorId.trim();
+    if (!targetActorId) return;
+    const me =
+      members.find((member) => member.actorId === currentActorId)?.displayName ??
+      "me";
+    const target =
+      members.find((member) => member.actorId === targetActorId)?.displayName ??
+      "direct";
+    const dmName = `dm-${me}-${target}`
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48);
+    try {
+      const response = await fetch("/api/team/channels", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: dmName.length > 0 ? dmName : `dm-${targetActorId.slice(0, 8)}`,
+          visibility: "private",
+          memberActorIds: [targetActorId],
+        }),
+        cache: "no-store",
+      });
+      const payload = (await response.json()) as {
+        channelId?: string;
+        permissionRequestId?: string;
+        error?: string;
+      };
+      if (!response.ok) {
+        if (payload.permissionRequestId) {
+          throw new Error(
+            `DM request submitted for admin approval (${payload.permissionRequestId}).`,
+          );
+        }
+        throw new Error(payload.error ?? `request failed: ${response.status}`);
+      }
+      if (!payload.channelId) {
+        throw new Error("dm creation did not return a channel id");
+      }
+      setDmTargetActorId("");
+      await refreshDirectory();
+      setActiveChannelId(payload.channelId);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function addPrivateChannelAttendee(actorId: string) {
+    if (!activeChannelId) return;
+    const candidate = actorId.trim();
+    if (!candidate) return;
+    try {
+      await api(`/api/team/channels/${activeChannelId}/members`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ actorId: candidate, role: "member" }),
+      });
+      await refreshChannelMembers(activeChannelId);
+      setPrivateHumanActorId("");
+      setPrivateAgentActorId("");
+      setPrivateAppActorId("");
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function removePrivateChannelAttendee(actorId: string) {
+    if (!activeChannelId) return;
+    try {
+      await api(`/api/team/channels/${activeChannelId}/members/${actorId}`, {
+        method: "DELETE",
+      });
+      await refreshChannelMembers(activeChannelId);
     } catch (err) {
       setError((err as Error).message);
     }
@@ -667,7 +820,10 @@ export function TeamWorkspace() {
                 onClick={() => setActiveChannelId(channel.id)}
                 type="button"
               >
-                #{channel.name}
+                <span className="truncate">#{channel.name}</span>
+                <span className="ml-2 text-[10px] uppercase tracking-wide text-zinc-500">
+                  {channel.visibility}
+                </span>
               </button>
               {canDeleteChannels ? (
                 <button
@@ -691,6 +847,18 @@ export function TeamWorkspace() {
             value={newChannelName}
             onChange={(event) => setNewChannelName(event.target.value)}
           />
+          <select
+            className="rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs uppercase text-zinc-300"
+            value={newChannelVisibility}
+            onChange={(event) =>
+              setNewChannelVisibility(
+                event.target.value === "private" ? "private" : "public",
+              )
+            }
+          >
+            <option value="public">public</option>
+            <option value="private">private</option>
+          </select>
           <button
             className="rounded-lg bg-zinc-100 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-900 transition hover:bg-white"
             onClick={createNewChannel}
@@ -699,6 +867,38 @@ export function TeamWorkspace() {
             Add
           </button>
         </div>
+        <div className="mt-2 flex gap-2">
+          <select
+            className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-3 py-2 text-xs text-zinc-200"
+            value={dmTargetActorId}
+            onChange={(event) => setDmTargetActorId(event.target.value)}
+          >
+            <option value="">start DM with…</option>
+            {dmCandidates.map((member) => (
+              <option key={member.actorId} value={member.actorId}>
+                {member.displayName} ({member.actorType})
+              </option>
+            ))}
+          </select>
+          <button
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
+            onClick={startDirectMessage}
+            type="button"
+            disabled={!dmTargetActorId}
+          >
+            DM
+          </button>
+        </div>
+
+        {isActivePrivateChannel ? (
+          <button
+            type="button"
+            onClick={() => setIsPrivateSettingsOpen(true)}
+            className="mt-4 w-full rounded-xl border border-zinc-700 bg-zinc-900 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800"
+          >
+            Manage private channel
+          </button>
+        ) : null}
 
         <div className="mt-6 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3">
           <h3 className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-400">
@@ -1166,6 +1366,145 @@ export function TeamWorkspace() {
           currentActorId={currentActorId}
           onClose={closeThread}
         />
+      ) : null}
+
+      {isActivePrivateChannel && isPrivateSettingsOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4"
+          onClick={() => setIsPrivateSettingsOpen(false)}
+        >
+          <div
+            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-zinc-700 bg-zinc-950 p-5 shadow-2xl shadow-black/70"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-[0.14em] text-zinc-300">
+                  Private channel settings
+                </h3>
+                <p className="mt-1 text-xs text-zinc-500">
+                  Configure which humans, agents, and apps can attend this
+                  channel.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPrivateSettingsOpen(false)}
+                className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 transition hover:border-zinc-600 hover:bg-zinc-900"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              <div className="flex gap-2">
+                <select
+                  className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs text-zinc-200"
+                  value={privateHumanActorId}
+                  onChange={(event) => setPrivateHumanActorId(event.target.value)}
+                >
+                  <option value="">add human…</option>
+                  {availablePrivateHumans.map((actor) => (
+                    <option key={actor.actorId} value={actor.actorId}>
+                      {actor.displayName}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void addPrivateChannelAttendee(privateHumanActorId)}
+                  disabled={!privateHumanActorId}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[11px] uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <select
+                  className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs text-zinc-200"
+                  value={privateAgentActorId}
+                  onChange={(event) => setPrivateAgentActorId(event.target.value)}
+                >
+                  <option value="">add agent…</option>
+                  {availablePrivateAgents.map((actor) => (
+                    <option key={actor.actorId} value={actor.actorId}>
+                      {actor.displayName}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void addPrivateChannelAttendee(privateAgentActorId)}
+                  disabled={!privateAgentActorId}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[11px] uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+              <div className="flex gap-2">
+                <select
+                  className="min-w-0 flex-1 rounded-lg border border-zinc-700/80 bg-zinc-900/80 px-2 py-2 text-xs text-zinc-200"
+                  value={privateAppActorId}
+                  onChange={(event) => setPrivateAppActorId(event.target.value)}
+                >
+                  <option value="">add app…</option>
+                  {availablePrivateApps.map((actor) => (
+                    <option key={actor.actorId} value={actor.actorId}>
+                      {actor.displayName}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void addPrivateChannelAttendee(privateAppActorId)}
+                  disabled={!privateAppActorId}
+                  className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-[11px] uppercase tracking-wide text-zinc-200 transition hover:border-zinc-600 hover:bg-zinc-800 disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-4 border-t border-zinc-800/60 pt-3">
+              <p className="text-[11px] uppercase tracking-wide text-zinc-500">
+                Current attendees
+              </p>
+              {channelMembers.length === 0 ? (
+                <p className="mt-2 text-xs text-zinc-500">No attendees yet.</p>
+              ) : (
+                <ul className="mt-2 space-y-1.5 text-sm">
+                  {channelMembers.map((attendee) => {
+                    const actor = actorsById[attendee.actorId];
+                    const actorType = actor?.actorType ?? "unknown";
+                    const displayName = actor?.displayName ?? attendee.actorId;
+                    return (
+                      <li
+                        key={attendee.actorId}
+                        className="flex items-center justify-between gap-2 rounded border border-zinc-800/80 bg-zinc-900/60 px-2 py-1.5"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-zinc-200">{displayName}</p>
+                          <p className="text-[10px] uppercase tracking-wide text-zinc-500">
+                            {actorType} · {attendee.role}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void removePrivateChannelAttendee(attendee.actorId)
+                          }
+                          className="rounded border border-zinc-700 px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-400 transition hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-300"
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
       ) : null}
     </div>
   );

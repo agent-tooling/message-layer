@@ -1,5 +1,11 @@
 import { NextResponse } from "next/server";
-import { createChannel, createPermissionRequest, getDefaultChannelId, listChannels } from "@/lib/message-layer";
+import {
+  addChannelMember,
+  createChannel,
+  createPermissionRequest,
+  getDefaultChannelId,
+  listChannels,
+} from "@/lib/message-layer";
 import { requirePrincipal } from "@/lib/server-auth";
 
 export async function GET(request: Request) {
@@ -16,13 +22,30 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const { principal } = await requirePrincipal(request.headers);
-    const body = (await request.json()) as { name?: string };
+    const body = (await request.json()) as {
+      name?: string;
+      visibility?: "public" | "private";
+      memberActorIds?: string[];
+    };
     const name = (body.name ?? "").trim();
+    const visibility = body.visibility === "private" ? "private" : "public";
+    const requestedMembers = Array.isArray(body.memberActorIds)
+      ? Array.from(
+          new Set(
+            body.memberActorIds
+              .map((value) => value.trim())
+              .filter((value) => value.length > 0 && value !== principal.actorId),
+          ),
+        )
+      : [];
     if (!name) {
       return NextResponse.json({ error: "name is required" }, { status: 400 });
     }
     try {
-      const channelId = await createChannel(principal, name);
+      const channelId = await createChannel(principal, name, visibility);
+      for (const actorId of requestedMembers) {
+        await addChannelMember(principal, channelId, actorId, "member");
+      }
       return NextResponse.json({ channelId });
     } catch (error) {
       const message = (error as Error).message;
@@ -36,7 +59,8 @@ export async function POST(request: Request) {
         context: {
           kind: "channel.create",
           requestedName: name,
-          requestedVisibility: "public",
+          requestedVisibility: visibility,
+          requestedMembers,
           requestedByActorId: principal.actorId,
         },
       });

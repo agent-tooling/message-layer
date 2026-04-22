@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
-import { resolvePermissionRequest, type ResolveOptions } from "@/lib/message-layer";
+import {
+  createGrant,
+  getPermissionRequest,
+  listChannels,
+  listThreads,
+  revokeGrant,
+  resolvePermissionRequest,
+  type ResolveOptions,
+} from "@/lib/message-layer";
 import { requirePrincipal } from "@/lib/server-auth";
 
 type Params = { params: Promise<{ requestId: string }> };
@@ -32,6 +40,52 @@ export async function POST(request: Request, { params }: Params) {
       expiresAt: body.expiresAt ?? null,
       maxUses: body.maxUses ?? null,
     };
+    if (body.approve) {
+      const requestRow = await getPermissionRequest(principal, requestId);
+      if (
+        requestRow &&
+        requestRow.status === "open" &&
+        requestRow.action === "message:append" &&
+        requestRow.resourceType === "thread" &&
+        typeof requestRow.resourceId === "string" &&
+        requestRow.resourceId.length > 0
+      ) {
+        const threadId = requestRow.resourceId;
+        const channels = await listChannels(principal);
+        let ownerChannelId: string | null = null;
+        for (const channel of channels) {
+          const threads = await listThreads(principal, channel.id);
+          if (threads.some((thread) => thread.id === threadId)) {
+            ownerChannelId = channel.id;
+            break;
+          }
+        }
+        if (ownerChannelId) {
+          const approved = await resolvePermissionRequest(
+            principal,
+            requestId,
+            true,
+            options,
+          );
+          if (approved.grantId) {
+            await revokeGrant(principal, approved.grantId);
+          }
+          await createGrant(principal, {
+            actorId: requestRow.actorId,
+            resourceType: "channel",
+            resourceId: ownerChannelId,
+            capability: "message:append",
+            expiresAt: options.expiresAt ?? null,
+            maxUses: options.maxUses ?? null,
+          });
+          return NextResponse.json({
+            ok: true,
+            grantScope: "channel",
+            channelId: ownerChannelId,
+          });
+        }
+      }
+    }
     await resolvePermissionRequest(principal, requestId, body.approve, options);
     return NextResponse.json({ ok: true });
   } catch (error) {

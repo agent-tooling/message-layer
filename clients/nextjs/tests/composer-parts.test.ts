@@ -12,6 +12,7 @@ import {
 const actors: ActorSuggestion[] = [
   { actorId: "a1", displayName: "Alice", actorType: "human" },
   { actorId: "a2", displayName: "Poet Bot", actorType: "agent" },
+  { actorId: "a3", displayName: "cursor-agent", actorType: "agent" },
 ];
 
 const commands: CommandSuggestion[] = [
@@ -61,6 +62,22 @@ describe("composer parts parser", () => {
     expect(mentions[1].payload).toMatchObject({
       actorId: "a2",
       label: "@Poet Bot",
+    });
+  });
+
+  test("parses unique alias mention for agent-style display names", () => {
+    const parsed = parseComposerInput({
+      text: "@cursor can you investigate this?",
+      actors,
+      commands,
+    });
+    const mentions = parsed.parts.filter((p) => p.type === "mention");
+    expect(mentions).toHaveLength(1);
+    expect(mentions[0].payload).toMatchObject({
+      actorId: "a3",
+      label: "@cursor",
+      start: 0,
+      end: 7,
     });
   });
 

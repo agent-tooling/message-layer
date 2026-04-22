@@ -50,6 +50,8 @@ async function handleIncomingMessage(
   mastraAgent: Agent,
   client: MessageLayerClient,
   channelId: string,
+  channelName: string,
+  reason: "general" | "mention" | "dm",
   selfActorId: string,
   streamSeq: number,
 ): Promise<void> {
@@ -61,9 +63,16 @@ async function handleIncomingMessage(
   const text = typeof textPart?.payload?.text === "string" ? textPart.payload.text : "";
   if (!text.trim()) return;
 
+  const reasonPrompt =
+    reason === "mention"
+      ? "You were @mentioned."
+      : reason === "dm"
+        ? "This arrived in a private DM channel."
+        : "This arrived in #general.";
   const response = await mastraAgent.generate(
-    `A user posted in #general: "${text}".
-Reply in #general as the assistant.
+    `${reasonPrompt}
+A user posted in #${channelName}: "${text}".
+Reply in the same channel as the assistant.
 If you need to create or manage channels, use your tools.
 Do not respond if the message is clearly just from yourself or empty.`,
   );
@@ -236,12 +245,13 @@ Do not ask the user to re-send the same prompt or "check back later".`,
     throw new Error("Could not find or create #general (likely waiting for permission approval).");
   }
   await sendArrivalMessage(client, generalChannelId);
-  console.log(`[assistant] subscribing to #general (${generalChannelId})`);
+  const channels = await client.listChannels();
+  console.log(`[assistant] subscribing to ${channels.length} channels`);
   try {
     await subscribeLoop({
       baseUrl: BASE_URL,
       principal,
-      channelId: generalChannelId,
+      channels,
       client,
       mastraAgent,
       once: ONCE,
@@ -252,7 +262,7 @@ Do not ask the user to re-send the same prompt or "check back later".`,
       `[assistant] websocket unavailable (${error instanceof Error ? error.message : String(error)}); falling back to polling mode`,
     );
     await pollLoop({
-      channelId: generalChannelId,
+      channels,
       client,
       mastraAgent,
       principalActorId: principal.actorId,
@@ -275,33 +285,48 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function pollLoop(input: {
-  channelId: string;
+  channels: Array<{ id: string; name: string; visibility: "public" | "private" }>;
   client: MessageLayerClient;
   mastraAgent: Agent;
   principalActorId: string;
   once: boolean;
 }): Promise<void> {
-  const existing = await input.client.listMessages(input.channelId, 0);
-  let lastSeq = existing.reduce((max, message) => Math.max(max, message.streamSeq), 0);
+  const lastSeqByChannel = new Map<string, number>();
+  for (const channel of input.channels) {
+    const existing = await input.client.listMessages(channel.id, 0);
+    const maxSeq = existing.reduce((max, message) => Math.max(max, message.streamSeq), 0);
+    lastSeqByChannel.set(channel.id, maxSeq);
+  }
   let handled = 0;
   for (;;) {
-    const events = await input.client.listStreamEvents(input.channelId, lastSeq);
-    for (const event of events) {
-      if (typeof event.streamSeq === "number") {
-        lastSeq = Math.max(lastSeq, event.streamSeq);
+    for (const channel of input.channels) {
+      const fromSeq = lastSeqByChannel.get(channel.id) ?? 0;
+      const events = await input.client.listStreamEvents(channel.id, fromSeq);
+      for (const event of events) {
+        if (typeof event.streamSeq === "number") {
+          lastSeqByChannel.set(channel.id, Math.max(fromSeq, event.streamSeq));
+        }
+        const seq = typeof event.streamSeq === "number" ? event.streamSeq : null;
+        if (seq === null) continue;
+        const shouldHandleGeneral = event.type === "message.appended" && channel.name === "general";
+        const shouldHandleDm = event.type === "message.appended" && channel.visibility === "private";
+        const shouldHandleMention =
+          event.type === "mention.recorded" &&
+          typeof event.payload.mentionedActorId === "string" &&
+          event.payload.mentionedActorId === input.principalActorId;
+        if (!shouldHandleGeneral && !shouldHandleMention && !shouldHandleDm) continue;
+        await handleIncomingMessage(
+          input.mastraAgent,
+          input.client,
+          channel.id,
+          channel.name,
+          shouldHandleDm ? "dm" : shouldHandleMention ? "mention" : "general",
+          input.principalActorId,
+          seq,
+        );
+        handled += 1;
+        if (input.once && handled >= 1) return;
       }
-      if (event.type !== "message.appended") continue;
-      const seq = typeof event.streamSeq === "number" ? event.streamSeq : null;
-      if (seq === null) continue;
-      await handleIncomingMessage(
-        input.mastraAgent,
-        input.client,
-        input.channelId,
-        input.principalActorId,
-        seq,
-      );
-      handled += 1;
-      if (input.once && handled >= 1) return;
     }
     await sleep(2200);
   }
@@ -310,7 +335,7 @@ async function pollLoop(input: {
 async function subscribeLoop(input: {
   baseUrl: string;
   principal: Principal;
-  channelId: string;
+  channels: Array<{ id: string; name: string; visibility: "public" | "private" }>;
   client: MessageLayerClient;
   mastraAgent: Agent;
   once: boolean;
@@ -324,14 +349,16 @@ async function subscribeLoop(input: {
 
   await new Promise<void>((resolve, reject) => {
     ws.on("open", () => {
-      ws.send(
-        JSON.stringify({
-          type: "subscribe",
-          streamId: input.channelId,
-          streamType: "channel",
-          fromSeq: lastSeq,
-        }),
-      );
+      for (const channel of input.channels) {
+        ws.send(
+          JSON.stringify({
+            type: "subscribe",
+            streamId: channel.id,
+            streamType: "channel",
+            fromSeq: lastSeq,
+          }),
+        );
+      }
     });
 
     ws.on("message", async (raw) => {
@@ -339,7 +366,12 @@ async function subscribeLoop(input: {
         const frame = JSON.parse(raw.toString()) as {
           type: string;
           lastSeq?: number;
-          event?: { type?: string; streamSeq?: number; payload?: { actorId?: string } };
+          event?: {
+            type?: string;
+            streamId?: string;
+            streamSeq?: number;
+            payload?: Record<string, unknown>;
+          };
           error?: string;
         };
         if (frame.type === "subscribed" && typeof frame.lastSeq === "number") {
@@ -351,14 +383,30 @@ async function subscribeLoop(input: {
           return;
         }
         if (frame.type !== "event") return;
-        if (frame.event?.type !== "message.appended") return;
-        const seq = typeof frame.event.streamSeq === "number" ? frame.event.streamSeq : null;
+        const event = frame.event;
+        if (!event) return;
+        const eventType = event.type ?? "";
+        const seq = typeof event.streamSeq === "number" ? event.streamSeq : null;
         if (seq === null) return;
+        const eventChannelId = typeof event.streamId === "string" ? event.streamId : "";
+        const channel = input.channels.find((item) => item.id === eventChannelId);
+        if (!channel) return;
+        const shouldHandleGeneral = eventType === "message.appended" && channel.name === "general";
+        const shouldHandleDm = eventType === "message.appended" && channel.visibility === "private";
+        const mentionedActorId =
+          typeof event.payload?.mentionedActorId === "string"
+            ? event.payload.mentionedActorId
+            : null;
+        const shouldHandleMention =
+          eventType === "mention.recorded" && mentionedActorId === input.principal.actorId;
+        if (!shouldHandleGeneral && !shouldHandleMention && !shouldHandleDm) return;
         lastSeq = Math.max(lastSeq, seq);
         await handleIncomingMessage(
           input.mastraAgent,
           input.client,
-          input.channelId,
+          channel.id,
+          channel.name,
+          shouldHandleDm ? "dm" : shouldHandleMention ? "mention" : "general",
           input.principal.actorId,
           seq,
         );

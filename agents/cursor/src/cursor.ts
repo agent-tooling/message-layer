@@ -38,8 +38,18 @@ type CursorInvocation = {
   sourceMessageId: string;
   /** Channel the stream resolves to (for channel→thread creation). */
   channelId: string;
+  /** Privacy scope of the channel that owns this invocation. */
+  channelVisibility: "public" | "private";
   /** Human-readable label describing *how* this invocation arrived. */
-  trigger: "command" | "mention";
+  trigger: "command" | "mention" | "dm";
+};
+
+type ActiveCursorThreadSession = {
+  runId: string;
+  threadId: string;
+  agentId: string;
+  agentUrl: string | null;
+  processedMessageIds: Set<string>;
 };
 
 async function isNextjsUp(): Promise<boolean> {
@@ -159,6 +169,18 @@ function extractPromptFromMention(message: MlMessage): string {
   return texts.join("\n").trim();
 }
 
+function extractPromptFromMessage(message: MlMessage): string {
+  const texts: string[] = [];
+  for (const part of message.parts) {
+    if (part.type !== "text") continue;
+    const text = part.payload?.text;
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text.trim());
+    }
+  }
+  return texts.join("\n").trim();
+}
+
 async function loadMessageById(
   client: MessageLayerClient,
   streamId: string,
@@ -175,6 +197,7 @@ async function handleInvocation(
   client: MessageLayerClient,
   selfActorId: string,
   invocation: CursorInvocation,
+  activeThreadSessions: Map<string, ActiveCursorThreadSession>,
 ): Promise<void> {
   const repository = invocation.repository ?? DEFAULT_REPOSITORY;
   const ref = invocation.ref ?? DEFAULT_REF;
@@ -185,10 +208,12 @@ async function handleInvocation(
   let targetStreamId = invocation.streamId;
   let targetStreamType: "channel" | "thread" = invocation.streamType;
   if (invocation.streamType === "channel") {
+    const threadVisibility =
+      invocation.channelVisibility === "private" ? "private" : "public";
     const created = await client.createThread(
       invocation.channelId,
       invocation.sourceMessageId,
-      "public",
+      threadVisibility,
     );
     if (!created.ok) {
       console.warn(
@@ -219,7 +244,12 @@ async function handleInvocation(
     return;
   }
 
-  const triggerLabel = invocation.trigger === "command" ? "`/cursor`" : "`@cursor` mention";
+  const triggerLabel =
+    invocation.trigger === "command"
+      ? "`/cursor`"
+      : invocation.trigger === "mention"
+        ? "`@cursor` mention"
+        : "DM";
   const ack = await client.appendParts({
     streamId: targetStreamId,
     streamType: targetStreamType,
@@ -301,19 +331,51 @@ async function handleInvocation(
       },
     ],
   });
+  if (targetStreamType === "thread") {
+    activeThreadSessions.set(targetStreamId, {
+      runId: invocation.runId,
+      threadId: targetStreamId,
+      agentId,
+      agentUrl: agentUrl ?? null,
+      processedMessageIds: new Set([invocation.sourceMessageId]),
+    });
+  }
+  void monitorCursorRun({
+    cursorApi,
+    client,
+    selfActorId,
+    runId: invocation.runId,
+    agentId,
+    targetStreamId,
+    targetStreamType,
+    agentUrl: agentUrl ?? null,
+    activeThreadSessions,
+  });
+}
 
+async function monitorCursorRun(input: {
+  cursorApi: CursorApiClient;
+  client: MessageLayerClient;
+  selfActorId: string;
+  runId: string;
+  agentId: string;
+  targetStreamId: string;
+  targetStreamType: "channel" | "thread";
+  agentUrl: string | null;
+  activeThreadSessions: Map<string, ActiveCursorThreadSession>;
+}): Promise<void> {
   let finalAgent: Awaited<ReturnType<CursorApiClient["waitForTerminal"]>>;
   try {
-    finalAgent = await cursorApi.waitForTerminal(agentId, { pollMs: 5000 });
+    finalAgent = await input.cursorApi.waitForTerminal(input.agentId, { pollMs: 5000 });
     console.log(
-      `[cursor] agent ${agentId} finished with status ${finalAgent.status}`,
+      `[cursor] agent ${input.agentId} finished with status ${finalAgent.status}`,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[cursor] agent ${agentId} error during polling: ${msg}`);
-    await client.appendParts({
-      streamId: targetStreamId,
-      streamType: targetStreamType,
+    console.error(`[cursor] agent ${input.agentId} error during polling: ${msg}`);
+    await input.client.appendParts({
+      streamId: input.targetStreamId,
+      streamType: input.targetStreamType,
       parts: [
         {
           type: "text",
@@ -324,7 +386,7 @@ async function handleInvocation(
           payload: {
             toolName: "cursor.run",
             content: JSON.stringify(
-              { runId: invocation.runId, agentId, status: "error", error: msg },
+              { runId: input.runId, agentId: input.agentId, status: "error", error: msg },
               null,
               2,
             ),
@@ -332,23 +394,29 @@ async function handleInvocation(
         },
       ],
     });
+    if (input.targetStreamType === "thread") {
+      const active = input.activeThreadSessions.get(input.targetStreamId);
+      if (active && active.agentId === input.agentId) {
+        input.activeThreadSessions.delete(input.targetStreamId);
+      }
+    }
     return;
   }
 
   const emoji = statusEmoji(finalAgent.status);
   const resultLines: string[] = [
-    `${emoji} Cursor agent \`${agentId}\` ${finalAgent.status.toLowerCase()}.`,
+    `${emoji} Cursor agent \`${input.agentId}\` ${finalAgent.status.toLowerCase()}.`,
   ];
   if (finalAgent.summary) resultLines.push("", finalAgent.summary);
   if (finalAgent.target?.prUrl) {
     resultLines.push("", `[View pull request](${finalAgent.target.prUrl})`);
-  } else if (agentUrl) {
-    resultLines.push("", `[View agent](${agentUrl})`);
+  } else if (input.agentUrl) {
+    resultLines.push("", `[View agent](${input.agentUrl})`);
   }
 
-  const posted = await client.appendParts({
-    streamId: targetStreamId,
-    streamType: targetStreamType,
+  const posted = await input.client.appendParts({
+    streamId: input.targetStreamId,
+    streamType: input.targetStreamType,
     parts: [
       { type: "text", payload: { text: resultLines.join("\n") } },
       {
@@ -357,13 +425,13 @@ async function handleInvocation(
           toolName: "cursor.run",
           content: JSON.stringify(
             {
-              runId: invocation.runId,
-              agentId,
+              runId: input.runId,
+              agentId: input.agentId,
               status: finalAgent.status.toLowerCase(),
               summary: finalAgent.summary ?? null,
               prUrl: finalAgent.target?.prUrl ?? null,
-              agentUrl: agentUrl ?? null,
-              responderActorId: selfActorId,
+              agentUrl: input.agentUrl,
+              responderActorId: input.selfActorId,
             },
             null,
             2,
@@ -374,9 +442,72 @@ async function handleInvocation(
   });
   if (!posted.ok) {
     console.warn(
-      `[cursor] failed to post completion for ${invocation.runId}: ${posted.message}`,
+      `[cursor] failed to post completion for ${input.runId}: ${posted.message}`,
     );
   }
+  if (input.targetStreamType === "thread") {
+    const active = input.activeThreadSessions.get(input.targetStreamId);
+    if (active && active.agentId === input.agentId) {
+      input.activeThreadSessions.delete(input.targetStreamId);
+    }
+  }
+}
+
+async function relayThreadMessageToCursor(input: {
+  cursorApi: CursorApiClient;
+  client: MessageLayerClient;
+  principal: Principal;
+  session: ActiveCursorThreadSession;
+  streamId: string;
+  messageId: string;
+  streamSeq: number;
+}): Promise<boolean> {
+  if (input.session.processedMessageIds.has(input.messageId)) return false;
+  input.session.processedMessageIds.add(input.messageId);
+  const message = await loadMessageById(
+    input.client,
+    input.streamId,
+    input.messageId,
+    input.streamSeq,
+  );
+  if (!message) return false;
+  if (message.actorId === input.principal.actorId) return false;
+  const prompt = extractPromptFromMessage(message);
+  if (!prompt) return false;
+
+  await input.cursorApi.addFollowup(input.session.agentId, {
+    text: prompt,
+  });
+  const relayed = await input.client.appendParts({
+    streamId: input.streamId,
+    streamType: "thread",
+    parts: [
+      {
+        type: "text",
+        payload: {
+          text: `Relayed follow-up to Cursor cloud agent \`${input.session.agentId}\`.`,
+          kind: "cursor_status",
+        },
+      },
+      {
+        type: "tool_call",
+        payload: {
+          toolName: "cursor.followup",
+          args: {
+            runId: input.session.runId,
+            agentId: input.session.agentId,
+            sourceMessageId: input.messageId,
+          },
+        },
+      },
+    ],
+  });
+  if (!relayed.ok) {
+    console.warn(
+      `[cursor] follow-up relay ack failed for ${input.session.runId}: ${relayed.message}`,
+    );
+  }
+  return true;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -400,9 +531,15 @@ async function handleCursorEvent(input: {
   payload: Record<string, unknown>;
   streamId: string;
   streamSeq: number;
+  streamContext: {
+    streamType: "channel" | "thread";
+    channelId: string;
+    visibility: "public" | "private";
+  };
+  activeThreadSessions: Map<string, ActiveCursorThreadSession>;
   remember: (messageId: string) => boolean;
 }): Promise<boolean> {
-  const { cursorApi, client, principal, eventType, payload, streamId, streamSeq, remember } =
+  const { cursorApi, client, principal, eventType, payload, streamId, streamSeq, streamContext, activeThreadSessions, remember } =
     input;
   if (eventType === "command.invoked") {
     const command =
@@ -449,10 +586,11 @@ async function handleCursorEvent(input: {
       ref,
       streamId: sourceStreamId,
       streamType,
-      channelId: streamType === "channel" ? sourceStreamId : streamId,
+      channelId: streamContext.channelId,
+      channelVisibility: streamContext.visibility,
       sourceMessageId: messageId,
       trigger: "command",
-    });
+    }, activeThreadSessions);
     return true;
   }
 
@@ -497,10 +635,63 @@ async function handleCursorEvent(input: {
       ref: null,
       streamId: sourceStreamId,
       streamType,
-      channelId: streamType === "channel" ? sourceStreamId : streamId,
+      channelId: streamContext.channelId,
+      channelVisibility: streamContext.visibility,
       sourceMessageId: messageId,
       trigger: "mention",
+    }, activeThreadSessions);
+    return true;
+  }
+  if (eventType === "message.appended" && streamContext.streamType === "thread") {
+    const actorId =
+      typeof payload.actorId === "string" ? payload.actorId : "";
+    if (actorId === principal.actorId) return false;
+    const messageId =
+      typeof payload.messageId === "string" ? payload.messageId : "";
+    if (!messageId) return false;
+    const session = activeThreadSessions.get(streamId);
+    if (!session) return false;
+    return relayThreadMessageToCursor({
+      cursorApi,
+      client,
+      principal,
+      session,
+      streamId,
+      messageId,
+      streamSeq,
     });
+  }
+  if (eventType === "message.appended" && streamContext.visibility === "private") {
+    const actorId =
+      typeof payload.actorId === "string" ? payload.actorId : "";
+    if (actorId === principal.actorId) return false;
+    const messageId =
+      typeof payload.messageId === "string" ? payload.messageId : "";
+    if (!messageId) return false;
+    if (!remember(`dm:${messageId}`)) return false;
+    const sourceStreamId =
+      typeof payload.streamId === "string" ? payload.streamId : streamId;
+    const message = await loadMessageById(
+      client,
+      sourceStreamId,
+      messageId,
+      streamSeq,
+    );
+    if (!message) return false;
+    const prompt = extractPromptFromMention(message);
+    if (!prompt) return false;
+    await handleInvocation(cursorApi, client, principal.actorId, {
+      runId: randomUUID().replace(/-/g, ""),
+      prompt,
+      repository: null,
+      ref: null,
+      streamId: sourceStreamId,
+      streamType: streamContext.streamType,
+      channelId: streamContext.channelId,
+      channelVisibility: streamContext.visibility,
+      sourceMessageId: messageId,
+      trigger: "dm",
+    }, activeThreadSessions);
     return true;
   }
   return false;
@@ -511,6 +702,7 @@ async function pollLoop(input: {
   client: MessageLayerClient;
   principal: Principal;
   processed: Set<string>;
+  activeThreadSessions: Map<string, ActiveCursorThreadSession>;
   once: boolean;
 }): Promise<void> {
   const streamLastSeq = new Map<string, number>();
@@ -523,13 +715,28 @@ async function pollLoop(input: {
 
   for (;;) {
     const channels = await input.client.listChannels();
-    const streams: Array<{ streamId: string; streamType: "channel" | "thread" }> = [];
+    const streams: Array<{
+      streamId: string;
+      streamType: "channel" | "thread";
+      channelId: string;
+      visibility: "public" | "private";
+    }> = [];
     for (const channel of channels) {
-      streams.push({ streamId: channel.id, streamType: "channel" });
+      streams.push({
+        streamId: channel.id,
+        streamType: "channel",
+        channelId: channel.id,
+        visibility: channel.visibility,
+      });
       try {
         const threads = await input.client.listThreads(channel.id);
         for (const thread of threads) {
-          streams.push({ streamId: thread.id, streamType: "thread" });
+          streams.push({
+            streamId: thread.id,
+            streamType: "thread",
+            channelId: channel.id,
+            visibility: channel.visibility,
+          });
         }
       } catch (error) {
         console.warn(
@@ -558,6 +765,12 @@ async function pollLoop(input: {
             payload: event.payload,
             streamId: stream.streamId,
             streamSeq: event.streamSeq,
+            streamContext: {
+              streamType: stream.streamType,
+              channelId: stream.channelId,
+              visibility: stream.visibility,
+            },
+            activeThreadSessions: input.activeThreadSessions,
             remember,
           });
           if (didHandle) handled += 1;
@@ -640,23 +853,58 @@ async function run(): Promise<void> {
     );
   }
 
-  const channels = await client.listChannels();
-  if (channels.length === 0) {
-    throw new Error("No channels visible to cursor-agent.");
-  }
+  const channelIds = new Set<string>();
   const threadIds = new Set<string>();
-  for (const channel of channels) {
-    try {
-      const threads = await client.listThreads(channel.id);
-      for (const thread of threads) threadIds.add(thread.id);
-    } catch (error) {
-      console.warn(
-        `[cursor] could not list threads for channel ${channel.id.slice(0, 8)}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+  const channelVisibility = new Map<string, "public" | "private">();
+  const threadChannelId = new Map<string, string>();
+
+  const syncDiscoveredStreams = async (ws: WebSocket): Promise<void> => {
+    const channels = await client.listChannels();
+    if (channels.length === 0) {
+      throw new Error("No channels visible to cursor-agent.");
     }
-  }
+    for (const channel of channels) {
+      channelVisibility.set(channel.id, channel.visibility);
+      if (!channelIds.has(channel.id)) {
+        channelIds.add(channel.id);
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              type: "subscribe",
+              streamId: channel.id,
+              streamType: "channel",
+              fromSeq: 0,
+            }),
+          );
+        }
+      }
+      try {
+        const threads = await client.listThreads(channel.id);
+        for (const thread of threads) {
+          threadChannelId.set(thread.id, channel.id);
+          if (!threadIds.has(thread.id)) {
+            threadIds.add(thread.id);
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(
+                JSON.stringify({
+                  type: "subscribe",
+                  streamId: thread.id,
+                  streamType: "thread",
+                  fromSeq: 0,
+                }),
+              );
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `[cursor] could not list threads for channel ${channel.id.slice(0, 8)}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+  };
 
   const ws = new WebSocket(toWsUrl(BASE_URL), {
     headers: { "x-principal": JSON.stringify(principal) },
@@ -665,6 +913,7 @@ async function run(): Promise<void> {
   // Dedupe per source message id. If a single message carries both `/cursor`
   // and `@cursor`, we still launch exactly one run.
   const processed = new Set<string>();
+  const activeThreadSessions = new Map<string, ActiveCursorThreadSession>();
   let handled = 0;
   let ready = false;
 
@@ -676,101 +925,108 @@ async function run(): Promise<void> {
 
   try {
     await new Promise<void>((resolve, reject) => {
-    ws.on("open", () => {
-      for (const channel of channels) {
-        ws.send(
-          JSON.stringify({
-            type: "subscribe",
-            streamId: channel.id,
-            streamType: "channel",
-            fromSeq: 0,
-          }),
-        );
-      }
-      for (const threadId of threadIds) {
-        ws.send(
-          JSON.stringify({
-            type: "subscribe",
-            streamId: threadId,
-            streamType: "thread",
-            fromSeq: 0,
-          }),
-        );
-      }
-      ready = true;
-    });
+      let syncTimer: NodeJS.Timeout | null = null;
+      ws.on("open", () => {
+        void syncDiscoveredStreams(ws).catch((error) => {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+        syncTimer = setInterval(() => {
+          void syncDiscoveredStreams(ws).catch((error) => {
+            console.warn(
+              `[cursor] stream sync failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+        }, 5000);
+        ready = true;
+      });
 
-    ws.on("message", async (raw) => {
-      if (!ready) return;
-      const frame = parseFrame(raw);
-      if (!frame) return;
-      if (frame.type === "subscribed" && frame.streamId) {
-        streamLastSeq.set(
-          frame.streamId,
-          Math.max(streamLastSeq.get(frame.streamId) ?? 0, frame.lastSeq ?? 0),
-        );
-        return;
-      }
-      if (frame.type === "error") {
-        reject(new Error(frame.error ?? "websocket error"));
-        return;
-      }
-      if (frame.type !== "event") return;
+      ws.on("message", async (raw) => {
+        if (!ready) return;
+        const frame = parseFrame(raw);
+        if (!frame) return;
+        if (frame.type === "subscribed" && frame.streamId) {
+          streamLastSeq.set(
+            frame.streamId,
+            Math.max(streamLastSeq.get(frame.streamId) ?? 0, frame.lastSeq ?? 0),
+          );
+          return;
+        }
+        if (frame.type === "error") {
+          reject(new Error(frame.error ?? "websocket error"));
+          return;
+        }
+        if (frame.type !== "event") return;
 
-      const eventType = frame.event?.type;
-      const payload = (frame.event?.payload ?? {}) as Record<string, unknown>;
-      const streamId = frame.event?.streamId ?? null;
-      const streamSeq =
-        typeof frame.event?.streamSeq === "number" ? frame.event.streamSeq : null;
-      if (!streamId || streamSeq === null) return;
+        const eventType = frame.event?.type;
+        const payload = (frame.event?.payload ?? {}) as Record<string, unknown>;
+        const streamId = frame.event?.streamId ?? null;
+        const streamSeq =
+          typeof frame.event?.streamSeq === "number" ? frame.event.streamSeq : null;
+        if (!streamId || streamSeq === null) return;
 
-      if (eventType === "thread.created") {
-        const threadId =
-          typeof payload.threadId === "string" ? payload.threadId : null;
-        if (threadId && !threadIds.has(threadId)) {
-          threadIds.add(threadId);
-          ws.send(
-            JSON.stringify({
-              type: "subscribe",
-              streamId: threadId,
-              streamType: "thread",
-              fromSeq: 0,
-            }),
+        if (eventType === "thread.created") {
+          const threadId =
+            typeof payload.threadId === "string" ? payload.threadId : null;
+          const channelId =
+            typeof payload.channelId === "string" ? payload.channelId : null;
+          if (threadId && !threadIds.has(threadId)) {
+            threadIds.add(threadId);
+            if (channelId) threadChannelId.set(threadId, channelId);
+            ws.send(
+              JSON.stringify({
+                type: "subscribe",
+                streamId: threadId,
+                streamType: "thread",
+                fromSeq: 0,
+              }),
+            );
+          }
+          return;
+        }
+
+        try {
+          const streamType = typeof payload.streamType === "string"
+            ? (payload.streamType === "thread" ? "thread" : "channel")
+            : (threadIds.has(streamId) ? "thread" : "channel");
+          const channelId =
+            streamType === "channel"
+              ? streamId
+              : threadChannelId.get(streamId) ?? streamId;
+          const visibility = channelVisibility.get(channelId) ?? "public";
+          const didHandle = await handleCursorEvent({
+            cursorApi,
+            client,
+            principal,
+            eventType: eventType ?? "",
+            payload,
+            streamId,
+            streamSeq,
+            streamContext: { streamType, channelId, visibility },
+            activeThreadSessions,
+            remember,
+          });
+          if (didHandle) handled += 1;
+        } catch (error) {
+          console.error(
+            `[cursor] error handling ${eventType ?? "event"}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
           );
         }
-        return;
-      }
 
-      try {
-        const didHandle = await handleCursorEvent({
-          cursorApi,
-          client,
-          principal,
-          eventType: eventType ?? "",
-          payload,
-          streamId,
-          streamSeq,
-          remember,
-        });
-        if (didHandle) handled += 1;
-      } catch (error) {
-        console.error(
-          `[cursor] error handling ${eventType ?? "event"}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+        if (ONCE && handled >= 1) {
+          ws.close(1000, "once complete");
+          resolve();
+        }
+      });
 
-      if (ONCE && handled >= 1) {
-        ws.close(1000, "once complete");
-        resolve();
-      }
-    });
-
-    ws.on("error", (error) => reject(error));
-    ws.on("close", () => {
-      if (!ONCE) resolve();
-    });
+      ws.on("error", (error) => reject(error));
+      ws.on("close", () => {
+        if (syncTimer) clearInterval(syncTimer);
+        if (!ONCE) resolve();
+      });
     });
   } catch (error) {
     if (!isWebsocketUnavailable(error)) throw error;
@@ -782,6 +1038,7 @@ async function run(): Promise<void> {
       client,
       principal,
       processed,
+      activeThreadSessions,
       once: ONCE,
     });
   }

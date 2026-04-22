@@ -206,6 +206,18 @@ export class MessageLayerClient {
     text: string;
     idempotencyKey?: string;
   }): Promise<MlAppendResult> {
+    return this.appendMessageInternal(opts, true);
+  }
+
+  private async appendMessageInternal(
+    opts: {
+      streamId: string;
+      streamType: "channel" | "thread";
+      text: string;
+      idempotencyKey?: string;
+    },
+    waitOnDeny: boolean,
+  ): Promise<MlAppendResult> {
     const { status, body } = await this.call<{
       messageId?: string;
       streamSeq?: number;
@@ -233,6 +245,28 @@ export class MessageLayerClient {
       error?: string;
     };
     if (status === 200 && b.denied === true && b.requestId) {
+      if (waitOnDeny) {
+        const decision = await this.waitForPermissionDecision(b.requestId);
+        if (decision === "approved") {
+          return this.appendMessageInternal(opts, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            code: "permission_denied",
+            message: `request ${b.requestId} was denied by an admin`,
+            requestId: b.requestId,
+            capability: b.capability ?? "message:append",
+          };
+        }
+        return {
+          ok: false,
+          code: "permission_denied",
+          message: `request ${b.requestId} is still pending admin approval`,
+          requestId: b.requestId,
+          capability: b.capability ?? "message:append",
+        };
+      }
       return {
         ok: false,
         code: "permission_denied",
@@ -268,6 +302,18 @@ export class MessageLayerClient {
     parts: MlPart[];
     idempotencyKey?: string;
   }): Promise<MlAppendResult> {
+    return this.appendPartsInternal(opts, true);
+  }
+
+  private async appendPartsInternal(
+    opts: {
+      streamId: string;
+      streamType: "channel" | "thread";
+      parts: MlPart[];
+      idempotencyKey?: string;
+    },
+    waitOnDeny: boolean,
+  ): Promise<MlAppendResult> {
     const { status, body } = await this.call<{
       messageId?: string;
       streamSeq?: number;
@@ -295,6 +341,28 @@ export class MessageLayerClient {
       error?: string;
     };
     if (status === 200 && b.denied === true && b.requestId) {
+      if (waitOnDeny) {
+        const decision = await this.waitForPermissionDecision(b.requestId);
+        if (decision === "approved") {
+          return this.appendPartsInternal(opts, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            code: "permission_denied",
+            message: `request ${b.requestId} was denied by an admin`,
+            requestId: b.requestId,
+            capability: b.capability ?? "message:append",
+          };
+        }
+        return {
+          ok: false,
+          code: "permission_denied",
+          message: `request ${b.requestId} is still pending admin approval`,
+          requestId: b.requestId,
+          capability: b.capability ?? "message:append",
+        };
+      }
       return {
         ok: false,
         code: "permission_denied",
