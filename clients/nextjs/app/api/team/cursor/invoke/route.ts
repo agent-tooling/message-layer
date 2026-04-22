@@ -73,8 +73,8 @@ export async function POST(request: Request) {
         args: {
           runId,
           channelId,
-          threadId,
-          streamType: "thread",
+          targetStreamId: threadId,
+          targetStreamType: "thread",
           requesterActorId: principal.actorId,
           parentMessageId: parentMessageId || null,
           prompt: invocationPrompt,
@@ -88,8 +88,8 @@ export async function POST(request: Request) {
       },
     };
     await appendMessage(principal, {
-      streamId: threadId,
-      streamType: "thread",
+      streamId: channelId,
+      streamType: "channel",
       idempotencyKey,
       parts: [introText, marker],
     });
