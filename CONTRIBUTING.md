@@ -65,7 +65,8 @@ src/
   ws.ts                 WebSocket subscription transport
   plugins.ts            Plugin runtime + all built-in plugin factories
   plugins/              Individual plugin implementations
-    scoped-knowledge.ts
+    memory.ts
+    search.ts
     webhooks.ts
     durable-streams.ts
     durable-streams-storage.ts

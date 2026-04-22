@@ -136,7 +136,7 @@ export const eventTypes = [
   "privacy_policy.updated",
   "artifact.registered",
   "artifact.deleted",
-  "knowledge.promoted",
+  "memory.promoted",
   "audit.logged",
   "org.created",
   "client.registered",

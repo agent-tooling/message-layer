@@ -4,6 +4,9 @@ dist
 coverage
 *.log
 agents/**/.data/
+agents/**/.env
+clients/**/.data
+clients/**/.data.*
 # reference repos (sparse clones, not tracked)
 references/electric/
 references/json-render/

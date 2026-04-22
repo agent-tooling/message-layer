@@ -19,7 +19,8 @@ import { apiKeyAuthPlugin }     from "message-layer/plugins/api-key-auth";
 import { eventLoggerPlugin }    from "message-layer/plugins/event-logger";
 import { webhookPlugin }        from "message-layer/plugins/webhooks";
 import { websocketPlugin }      from "message-layer/plugins/websocket";
-import { scopedKnowledgePlugin }from "message-layer/plugins/scoped-knowledge";
+import { memoryPlugin }         from "message-layer/plugins/memory";
+import { searchPlugin }         from "message-layer/plugins/search";
 import { durableStreamsPlugin }  from "message-layer/plugins/durable-streams";
 
 await startServer({
@@ -221,19 +222,71 @@ Subscription body:
 
 ---
 
-### `scoped-knowledge`
+### `memory`
 
-Persists message-derived knowledge entries per stream. Every `message.appended`
-event is indexed; entries snapshot their source stream's visibility so derived
-data can never be retroactively widened.
+Derives reusable **memory units** from text parts of `message.appended`
+events. Memory is not a verbatim copy of messages: each unit is normalized,
+chunked, deduplicated by content hash, and tagged with extracted keywords
+so the same insight posted twice collapses into one unit (with multiple
+provenance edges in `memory_source_messages`). The plugin handles
+`message.redacted` by removing tombstoned source links and deleting the
+unit when no live messages remain.
+
+Source `streamId`, `streamType`, and `visibility` are snapshotted at
+insertion time, matching the AGENTS.md rule that derived data must never
+be more visible than its source unless explicitly promoted via the audited
+`recordMemoryPromotion` core hook (which emits the `memory.promoted`
+event consumed by this plugin).
 
 **Routes added:**
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/v1/knowledge?streamId=…` | List knowledge entries for a stream. |
-| `GET` | `/v1/knowledge/:entryId` | Fetch a single entry. |
-| `POST` | `/v1/knowledge/:entryId/promote` | Promote an entry org-wide (requires `knowledge:promote`). |
+| `GET` | `/v1/memory?streamId=…` | List memory units bound to a stream. |
+| `GET` | `/v1/memory?promoted=true` | List org-wide promoted memory. |
+| `GET` | `/v1/memory/search?q=…` | Lexical search across visible memory. |
+| `GET` | `/v1/memory/:memoryId` | Fetch a single unit (with provenance). |
+| `POST` | `/v1/memory/:memoryId/promote` | Promote a unit org-wide (requires `memory:promote`). |
+
+The plugin exposes a tiny in-process composition adapter:
+`registerMemoryIndexProvider(handler)` from `message-layer/plugins/memory`
+lets other plugins (the built-in `search` plugin uses it) subscribe to
+`MemoryIndexEvent`s. Composition is optional — memory works standalone
+and `search` works without `memory`.
+
+See [http-api.md](./http-api.md) for full request/response shapes.
+
+---
+
+### `search`
+
+Privacy-aware lexical search across the core entities the message-layer
+manages: actors (`human` / `agent` / `app`), channels, threads, messages
+(including threaded messages), and — when the `memory` plugin is enabled
+— derived memory units. The plugin owns its own `search_documents` table
+(plus a small composition adapter) and is populated by domain events:
+
+| Event                          | Effect                            |
+|--------------------------------|------------------------------------|
+| `membership.updated` (org)     | upsert `actor` document            |
+| `channel.created`              | upsert `channel` document          |
+| `thread.created`               | upsert `thread` document           |
+| `message.appended`             | upsert `message` document          |
+| `message.redacted`             | delete the `message` document      |
+| `MemoryIndexEvent` (composition) | upsert / delete `memory` document |
+
+Every result is privacy-filtered by delegating to the same core service
+methods used by the rest of the system (`assertCanReadStream`, org
+membership checks). Promoted memory is readable across streams the way
+the core promotion contract requires, but private message and thread
+content never leaks.
+
+**Routes added:**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v1/search?q=…` | Mixed-entity ranked search. Supports `entityTypes`, `streamId`, `actorType`, `limit`. |
+| `GET` | `/v1/search/suggest?q=…` | Lightweight autosuggest for actors, channels, and threads. |
 
 See [http-api.md](./http-api.md) for full request/response shapes.
 

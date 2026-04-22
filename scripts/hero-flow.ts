@@ -3,7 +3,8 @@
  * Runnable end-to-end demo of all message-layer capabilities:
  *
  *   health · discovery · permissions · threads · moderation · cursors ·
- *   artifacts · grants · webhooks · durable-streams · knowledge · audit
+ *   artifacts · grants · webhooks · durable-streams · memory · search ·
+ *   audit
  *
  * Boots the real message-layer server in-process with all plugins enabled,
  * drives everything through HTTP (no direct service calls), and narrates each
@@ -64,7 +65,8 @@ async function main(): Promise<void> {
         },
         artifacts: { kind: "memory", maxBytes: 5 * 1024 * 1024 },
         plugins: [
-          "scoped-knowledge",
+          "memory",
+          "search",
           "webhooks",
           "durable-streams",
           { name: "health-meta", options: { version: "hero-demo" } },
@@ -112,8 +114,11 @@ async function main(): Promise<void> {
     banner("durable streams (agent task queue)");
     const dsMessageId = await durableStreamFlow(server, ctx);
 
-    banner("scoped-knowledge derivation");
-    const promotedEntryId = await knowledgeFlow(server, ctx);
+    banner("memory derivation + promotion");
+    const promotedMemoryId = await memoryFlow(server, ctx);
+
+    banner("cross-entity search");
+    await searchFlow(server, ctx);
 
     banner("audit trail");
     await auditFlow(server, ctx);
@@ -123,7 +128,7 @@ async function main(): Promise<void> {
     log("ok", `  artifact:        ${artifactId}`);
     log("ok", `  thread:          ${threadId}`);
     log("ok", `  ds message:      ${dsMessageId}`);
-    log("ok", `  promoted entry:  ${promotedEntryId}`);
+    log("ok", `  promoted memory: ${promotedMemoryId}`);
     log("ok", `  audit:           ${c.cyan}GET ${server.address}/v1/audit/rows${c.reset} with x-principal`);
   } catch (error) {
     logErr(error instanceof Error ? error.message : String(error));
@@ -190,7 +195,7 @@ async function bootstrap(server: RunningServer): Promise<BaseActors> {
       "thread:create",
       "grant:create",
       "message:append",
-      "knowledge:promote",
+      "memory:promote",
       "audit:read",
       "webhook:subscribe",
       "webhook:read",
@@ -758,43 +763,87 @@ async function durableStreamFlow(server: RunningServer, ctx: Actors): Promise<st
   return commit.committedMessageId;
 }
 
-async function knowledgeFlow(server: RunningServer, ctx: Actors): Promise<string> {
-  const entries = await json<{
-    entries: Array<{ id: string; text: string; sourceVisibility: string; promoted: boolean }>;
-  }>(server, "GET", `/v1/knowledge?streamId=${ctx.channelId}`, ctx.admin);
-  log("plugin", `derived ${c.magenta}${entries.entries.length}${c.reset} knowledge entries for #launch (all sourceVisibility=private)`);
-  for (const e of entries.entries) {
-    log("entry", `  ${c.dim}${short(e.id)}${c.reset}  ${truncate(e.text, 60)}  promoted=${e.promoted}`);
+async function memoryFlow(server: RunningServer, ctx: Actors): Promise<string> {
+  type MemoryUnitDto = {
+    id: string;
+    canonicalText: string;
+    summary: string;
+    keywords: string[];
+    sourceVisibility: string;
+    promoted: boolean;
+    sourceMessageIds: string[];
+  };
+  const units = await json<{ units: MemoryUnitDto[] }>(
+    server,
+    "GET",
+    `/v1/memory?streamId=${ctx.channelId}`,
+    ctx.admin,
+  );
+  log("plugin", `derived ${c.magenta}${units.units.length}${c.reset} memory units for #launch (all sourceVisibility=private)`);
+  for (const u of units.units) {
+    log("unit", `  ${c.dim}${short(u.id)}${c.reset}  ${truncate(u.canonicalText, 50)}  kw=[${u.keywords.slice(0, 4).join(",")}]  promoted=${u.promoted}`);
   }
 
-  const outsiderTry = await raw(server, "GET", `/v1/knowledge?streamId=${ctx.channelId}`, ctx.outsider);
-  log("outsider", `GET /v1/knowledge?streamId=#launch → ${c.red}${outsiderTry.status}${c.reset} (scope inherited from source)`);
+  const outsiderTry = await raw(server, "GET", `/v1/memory?streamId=${ctx.channelId}`, ctx.outsider);
+  log("outsider", `GET /v1/memory?streamId=#launch → ${c.red}${outsiderTry.status}${c.reset} (scope inherited from source)`);
 
-  const toPromote = entries.entries.find((e) => e.text.startsWith("kickoff:"))!;
-  const promoted = await json<{ entry: { promoted: boolean; id: string } }>(
+  const toPromote = units.units.find((u) => u.canonicalText.startsWith("kickoff:"))!;
+  const promoted = await json<{ unit: { promoted: boolean; id: string } }>(
     server,
     "POST",
-    `/v1/knowledge/${toPromote.id}/promote`,
+    `/v1/memory/${toPromote.id}/promote`,
     ctx.admin,
     { summary: "shareable release plan" },
   );
-  log("admin", `promoted entry ${c.green}${short(promoted.entry.id)}${c.reset} → emits knowledge.promoted on the bus`);
+  log("admin", `promoted memory ${c.green}${short(promoted.unit.id)}${c.reset} → emits memory.promoted on the bus`);
 
-  const promotedView = await json<{ entry: { id: string; promoted: boolean } }>(
+  const promotedView = await json<{ unit: { id: string; promoted: boolean } }>(
     server,
     "GET",
-    `/v1/knowledge/${toPromote.id}`,
+    `/v1/memory/${toPromote.id}`,
     ctx.outsider,
   );
-  log("outsider", `can now fetch promoted entry ${c.green}${short(promotedView.entry.id)}${c.reset}`);
+  log("outsider", `can now fetch promoted memory ${c.green}${short(promotedView.unit.id)}${c.reset}`);
 
-  const stillPrivate = entries.entries.find((e) => e.text.startsWith("plan:"));
+  const stillPrivate = units.units.find((u) => u.canonicalText.startsWith("plan:"));
   if (stillPrivate) {
-    const stillDenied = await raw(server, "GET", `/v1/knowledge/${stillPrivate.id}`, ctx.outsider);
-    log("outsider", `but other entries remain ${c.red}${stillDenied.status}${c.reset} (derived visibility preserved)`);
+    const stillDenied = await raw(server, "GET", `/v1/memory/${stillPrivate.id}`, ctx.outsider);
+    log("outsider", `but other units remain ${c.red}${stillDenied.status}${c.reset} (derived visibility preserved)`);
   }
 
   return toPromote.id;
+}
+
+async function searchFlow(server: RunningServer, ctx: Actors): Promise<void> {
+  type SearchHit = { entityType: string; entityId: string; title: string; promoted: boolean };
+  const adminAll = await json<{ hits: SearchHit[] }>(
+    server,
+    "GET",
+    `/v1/search?q=${encodeURIComponent("v1.0")}`,
+    ctx.admin,
+  );
+  log("admin", `cross-entity search "v1.0" → ${c.magenta}${adminAll.hits.length}${c.reset} hit(s)`);
+  for (const hit of adminAll.hits.slice(0, 5)) {
+    log("hit", `  ${c.cyan}${hit.entityType.padEnd(7)}${c.reset} ${truncate(hit.title, 50)}`);
+  }
+
+  const actorOnly = await json<{ hits: SearchHit[] }>(
+    server,
+    "GET",
+    `/v1/search?q=${encodeURIComponent("coder")}&entityTypes=actor`,
+    ctx.admin,
+  );
+  log("admin", `actor search "coder" → ${c.magenta}${actorOnly.hits.length}${c.reset} hit(s) (scoped to entityTypes=actor)`);
+
+  const outsiderHits = await json<{ hits: SearchHit[] }>(
+    server,
+    "GET",
+    `/v1/search?q=${encodeURIComponent("plan")}`,
+    ctx.outsider,
+  );
+  const memoryHits = outsiderHits.hits.filter((h) => h.entityType === "memory");
+  const messageHits = outsiderHits.hits.filter((h) => h.entityType === "message");
+  log("outsider", `outsider search "plan" → ${c.magenta}${outsiderHits.hits.length}${c.reset} total; memory=${memoryHits.length} (only promoted), message=${messageHits.length} (none, private)`);
 }
 
 async function auditFlow(server: RunningServer, ctx: Actors): Promise<void> {

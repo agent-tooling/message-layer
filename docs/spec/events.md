@@ -45,7 +45,7 @@ driving external runtimes.
 | `privacy_policy.updated`       | org        | The org's privacy policy changed.                      |
 | `artifact.registered`          | stream     | An artifact was registered against a stream.           |
 | `artifact.deleted`             | stream     | An artifact was soft-deleted.                          |
-| `knowledge.promoted`           | org        | Content was promoted to org-level knowledge.           |
+| `memory.promoted`              | org        | A derived memory unit was promoted org-wide.           |
 | `audit.logged`                 | org        | An audit entry was appended.                           |
 | `client.registered`            | org        | A client endpoint was registered.                      |
 

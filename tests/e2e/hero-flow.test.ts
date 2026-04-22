@@ -11,9 +11,10 @@ import type { Principal } from "../../src/types.js";
  *  1. Bootstrap: org, human admin, agent, app attached to one channel
  *  2. Permission request lifecycle (agent → human approval loop)
  *  3. Artifact upload + download (stream-scoped, sha256-verified)
- *  4. Scoped knowledge derivation with source-visibility preservation
- *  5. Knowledge promotion emitting `knowledge.promoted`
- *  6. Full audit trail verification
+ *  4. Memory derivation with source-visibility preservation
+ *  5. Memory promotion emitting `memory.promoted`
+ *  6. Cross-entity search (actors, channels, threads, messages, memory)
+ *  7. Full audit trail verification
  *
  * No mocks, no stubs — everything runs through the same code paths a real
  * developer would hit after `pnpm run dev`.
@@ -40,7 +41,7 @@ beforeEach(async () => {
       port: 0,
       storage: { adapter: "pglite", path: `memory://hero-${Math.random().toString(16).slice(2)}` },
       artifacts: { kind: "memory", maxBytes: 5 * 1024 * 1024 },
-      plugins: ["scoped-knowledge"],
+      plugins: ["memory", "search"],
     },
   });
 });
@@ -111,7 +112,7 @@ async function bootstrap(): Promise<ActorBundle> {
       "thread:create",
       "grant:create",
       "message:append",
-      "knowledge:promote",
+      "memory:promote",
       "audit:read",
     ],
     provider: "test",
@@ -155,7 +156,7 @@ async function bootstrap(): Promise<ActorBundle> {
 }
 
 describe("hero flow — human + agent + app in one channel", () => {
-  test("permission → artifact → knowledge → audit all work end-to-end", async () => {
+  test("permission → artifact → memory → search → audit all work end-to-end", async () => {
     const ctx = await bootstrap();
 
     // ── 1. Admin posts the first message; agent gets append grant and posts a plan. ──
@@ -274,93 +275,144 @@ describe("hero flow — human + agent + app in one channel", () => {
     const outsiderDl = await httpRaw("GET", `/v1/artifacts/${artifactId}/content`, ctx.outsider);
     expect(outsiderDl.status).toBe(403);
 
-    // ── 4. Scoped-knowledge plugin has derived entries ──
-    const knowledge = await http<{ entries: Array<{ id: string; text: string; sourceVisibility: string; promoted: boolean }> }>(
+    // ── 4. Memory plugin has derived units ──
+    type MemoryUnitDto = {
+      id: string;
+      canonicalText: string;
+      summary: string;
+      keywords: string[];
+      sourceVisibility: string;
+      sourceMessageIds: string[];
+      promoted: boolean;
+    };
+    const memory = await http<{ units: MemoryUnitDto[] }>(
       "GET",
-      `/v1/knowledge?streamId=${ctx.channelId}`,
+      `/v1/memory?streamId=${ctx.channelId}`,
       ctx.admin,
     );
-    expect(knowledge.status).toBe(200);
-    const entryTexts = knowledge.body.entries.map((e) => e.text);
-    expect(entryTexts).toContain("kickoff: cutting v1.0 today");
-    expect(entryTexts).toContain("plan: run tests, ship binary, announce in #launch");
-    expect(entryTexts).toContain("build complete, hash=deadbeef");
-    for (const e of knowledge.body.entries) {
-      expect(e.sourceVisibility).toBe("private");
-      expect(e.promoted).toBe(false);
+    expect(memory.status).toBe(200);
+    const unitTexts = memory.body.units.map((u) => u.canonicalText);
+    expect(unitTexts).toContain("kickoff: cutting v1.0 today");
+    expect(unitTexts).toContain("plan: run tests, ship binary, announce in #launch");
+    expect(unitTexts).toContain("build complete, hash=deadbeef");
+    for (const u of memory.body.units) {
+      expect(u.sourceVisibility).toBe("private");
+      expect(u.promoted).toBe(false);
+      expect(u.sourceMessageIds.length).toBeGreaterThanOrEqual(1);
     }
 
-    // Outsider can't peek into the private channel's knowledge.
-    const outsiderKnowledge = await http<{ error: string; code: string }>(
+    // Outsider can't peek into the private channel's memory.
+    const outsiderMemory = await http<{ error: string; code: string }>(
       "GET",
-      `/v1/knowledge?streamId=${ctx.channelId}`,
+      `/v1/memory?streamId=${ctx.channelId}`,
       ctx.outsider,
     );
-    expect(outsiderKnowledge.status).toBe(403);
-    expect(outsiderKnowledge.body.code).toBe("PERMISSION_DENIED");
+    expect(outsiderMemory.status).toBe(403);
+    expect(outsiderMemory.body.code).toBe("PERMISSION_DENIED");
 
-    // Knowledge from a completely unrelated private channel does not leak.
-    const otherChannelEntries = await http<{ entries: unknown[] }>(
+    // Memory from a completely unrelated private channel does not leak.
+    const otherChannelUnits = await http<{ units: unknown[] }>(
       "GET",
-      `/v1/knowledge?streamId=${ctx.privateChannelId}`,
+      `/v1/memory?streamId=${ctx.privateChannelId}`,
       ctx.admin,
     );
-    expect(otherChannelEntries.body.entries).toHaveLength(0);
+    expect(otherChannelUnits.body.units).toHaveLength(0);
 
-    // ── 5. Promote one entry; outsider can now see exactly that entry ──
-    const toPromote = knowledge.body.entries.find((e) => e.text.startsWith("plan:"));
+    // ── 5. Promote one unit; outsider can now see exactly that one ──
+    const toPromote = memory.body.units.find((u) => u.canonicalText.startsWith("plan:"));
     expect(toPromote).toBeDefined();
-    const promote = await http<{ entry: { promoted: boolean; promotionSummary: string | null } }>(
+    const promote = await http<{ unit: { promoted: boolean; promotionSummary: string | null } }>(
       "POST",
-      `/v1/knowledge/${toPromote!.id}/promote`,
+      `/v1/memory/${toPromote!.id}/promote`,
       ctx.admin,
       { summary: "shareable release plan" },
     );
     expect(promote.status).toBe(200);
-    expect(promote.body.entry.promoted).toBe(true);
-    expect(promote.body.entry.promotionSummary).toBe("shareable release plan");
+    expect(promote.body.unit.promoted).toBe(true);
+    expect(promote.body.unit.promotionSummary).toBe("shareable release plan");
 
     // Double-promote is idempotent in the UX sense (returns current state).
-    const repromote = await http<{ entry: { promoted: boolean } }>(
+    const repromote = await http<{ unit: { promoted: boolean } }>(
       "POST",
-      `/v1/knowledge/${toPromote!.id}/promote`,
+      `/v1/memory/${toPromote!.id}/promote`,
       ctx.admin,
       {},
     );
-    expect(repromote.body.entry.promoted).toBe(true);
+    expect(repromote.body.unit.promoted).toBe(true);
 
-    // Outsider can fetch the promoted entry directly,
-    const outsiderEntry = await http<{ entry: { promoted: boolean; id: string } }>(
+    // Outsider can fetch the promoted unit directly,
+    const outsiderUnit = await http<{ unit: { promoted: boolean; id: string } }>(
       "GET",
-      `/v1/knowledge/${toPromote!.id}`,
+      `/v1/memory/${toPromote!.id}`,
       ctx.outsider,
     );
-    expect(outsiderEntry.status).toBe(200);
-    expect(outsiderEntry.body.entry.promoted).toBe(true);
-    expect(outsiderEntry.body.entry.id).toBe(toPromote!.id);
+    expect(outsiderUnit.status).toBe(200);
+    expect(outsiderUnit.body.unit.promoted).toBe(true);
+    expect(outsiderUnit.body.unit.id).toBe(toPromote!.id);
 
-    // …but not other, still-scoped entries.
-    const stillPrivate = knowledge.body.entries.find((e) => e.text.startsWith("kickoff:"));
-    const privateEntryAsOutsider = await http<{ error: string }>(
+    // …but not other, still-scoped units.
+    const stillPrivate = memory.body.units.find((u) => u.canonicalText.startsWith("kickoff:"));
+    const privateUnitAsOutsider = await http<{ error: string }>(
       "GET",
-      `/v1/knowledge/${stillPrivate!.id}`,
+      `/v1/memory/${stillPrivate!.id}`,
       ctx.outsider,
     );
-    expect(privateEntryAsOutsider.status).toBe(403);
+    expect(privateUnitAsOutsider.status).toBe(403);
 
-    // Org-wide promoted listing shows exactly one entry to the outsider.
-    const orgPromoted = await http<{ entries: Array<{ id: string; text: string; promoted: boolean }> }>(
+    // Org-wide promoted listing shows exactly one unit to the outsider.
+    const orgPromoted = await http<{ units: Array<{ id: string; canonicalText: string; promoted: boolean }> }>(
       "GET",
-      "/v1/knowledge?includePromotedElsewhere=true",
+      "/v1/memory?promoted=true",
       ctx.outsider,
     );
     expect(orgPromoted.status).toBe(200);
-    expect(orgPromoted.body.entries.map((e) => e.id)).toEqual([toPromote!.id]);
-    for (const e of orgPromoted.body.entries) expect(e.promoted).toBe(true);
+    expect(orgPromoted.body.units.map((u) => u.id)).toEqual([toPromote!.id]);
+    for (const u of orgPromoted.body.units) expect(u.promoted).toBe(true);
 
-    // ── 6. Knowledge:promote gate for non-admins ──
-    const uninvited = await http<{ code: string }>("POST", `/v1/knowledge/${stillPrivate!.id}/promote`, ctx.agent, {});
+    // ── 6. memory:promote gate for non-admins ──
+    const uninvited = await http<{ code: string }>("POST", `/v1/memory/${stillPrivate!.id}/promote`, ctx.agent, {});
     expect(uninvited.status).toBe(403);
+
+    // ── 6b. Cross-entity search (search plugin) ──
+    // Admin can find their own message about "kickoff", the channel, and
+    // the actor "coder-bot" in a single mixed-entity result set.
+    const heroSearch = await http<{
+      hits: Array<{ entityType: string; entityId: string; title: string }>;
+    }>(
+      "GET",
+      `/v1/search?q=${encodeURIComponent("kickoff")}`,
+      ctx.admin,
+    );
+    expect(heroSearch.status).toBe(200);
+    expect(heroSearch.body.hits.some((h) => h.entityType === "message")).toBe(true);
+    expect(heroSearch.body.hits.some((h) => h.entityType === "memory")).toBe(true);
+
+    const actorSearch = await http<{
+      hits: Array<{ entityType: string; title: string }>;
+    }>(
+      "GET",
+      `/v1/search?q=${encodeURIComponent("coder")}&entityTypes=actor`,
+      ctx.admin,
+    );
+    expect(actorSearch.status).toBe(200);
+    expect(actorSearch.body.hits[0]?.entityType).toBe("actor");
+    expect(actorSearch.body.hits[0]?.title).toContain("coder");
+
+    // Outsider only sees the org-promoted memory hit when searching for
+    // "plan" — no private message/memory hits leak.
+    const outsiderSearch = await http<{
+      hits: Array<{ entityType: string; promoted: boolean; entityId: string }>;
+    }>(
+      "GET",
+      `/v1/search?q=${encodeURIComponent("plan")}`,
+      ctx.outsider,
+    );
+    expect(outsiderSearch.status).toBe(200);
+    for (const h of outsiderSearch.body.hits) {
+      if (h.entityType === "memory") expect(h.promoted).toBe(true);
+      // No private message hits should leak.
+      expect(h.entityType).not.toBe("message");
+    }
 
     // ── 7. Full audit trail captures every expected event and verifies ──
     const rows = await http<{ rows: Array<{ eventType: string }> }>("GET", "/v1/audit/rows", ctx.admin);
@@ -375,7 +427,7 @@ describe("hero flow — human + agent + app in one channel", () => {
       "permission_request.created",
       "permission_request.resolved",
       "artifact.registered",
-      "knowledge.promoted",
+      "memory.promoted",
     ] as const;
     for (const t of required) {
       expect(types).toContain(t);

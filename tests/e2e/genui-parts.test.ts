@@ -260,7 +260,7 @@ describe("HTTP / ui message parts", () => {
     expect((appendedRows[0].payload as { partCount: number }).partCount).toBe(1);
   });
 
-  test("knowledge plugin indexes ui messages (scoped-knowledge)", async () => {
+  test("memory plugin extracts text from messages with ui parts (and ignores ui parts)", async () => {
     const srv = await startServer({
       port: 0,
       logger: () => {},
@@ -268,15 +268,15 @@ describe("HTTP / ui message parts", () => {
         port: 0,
         storage: {
           adapter: "pglite",
-          path: `memory://genui-sk-${Math.random().toString(16).slice(2)}`,
+          path: `memory://genui-mem-${Math.random().toString(16).slice(2)}`,
         },
         artifacts: { kind: "memory" },
-        plugins: ["scoped-knowledge"],
+        plugins: ["memory"],
       },
     });
 
     // All calls go to `srv`, not the outer server, so use a local fetch helper
-    const skFetch = async <T>(method: "GET" | "POST", path: string, principal: Principal | null, body?: unknown): Promise<{ status: number; body: T }> => {
+    const memFetch = async <T>(method: "GET" | "POST", path: string, principal: Principal | null, body?: unknown): Promise<{ status: number; body: T }> => {
       const headers: Record<string, string> = { "content-type": "application/json" };
       if (principal) headers["x-principal"] = JSON.stringify(principal);
       const res = await fetch(`${srv.address}${path}`, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
@@ -284,8 +284,8 @@ describe("HTTP / ui message parts", () => {
     };
 
     try {
-      const { body: org } = await skFetch<{ orgId: string }>("POST", "/v1/orgs", null, { name: "sk-org" });
-      const { body: act } = await skFetch<{ actorId: string }>("POST", "/v1/actors", null, {
+      const { body: org } = await memFetch<{ orgId: string }>("POST", "/v1/orgs", null, { name: "mem-org" });
+      const { body: act } = await memFetch<{ actorId: string }>("POST", "/v1/actors", null, {
         orgId: org.orgId,
         actorType: "human",
         displayName: "admin",
@@ -293,34 +293,34 @@ describe("HTTP / ui message parts", () => {
       const p: Principal = {
         actorId: act.actorId,
         orgId: org.orgId,
-        scopes: ["channel:create", "message:append", "knowledge:promote"],
+        scopes: ["channel:create", "message:append", "memory:promote"],
         provider: "e2e-test",
       };
-      const { body: ch } = await skFetch<{ channelId: string }>("POST", "/v1/channels", p, {
-        name: "sk-ch",
+      const { body: ch } = await memFetch<{ channelId: string }>("POST", "/v1/channels", p, {
+        name: "mem-ch",
         visibility: "private",
       });
 
-      // Post a message with BOTH a text summary and a ui part.
-      // scoped-knowledge indexes the text summary; the ui part is stored but
-      // not extracted (the plugin only operates on text parts by design).
-      await skFetch("POST", "/v1/messages", p, {
+      // Post a message with BOTH a text summary and a ui part. The memory
+      // plugin extracts the text part; the ui part is stored as a message
+      // part by core but is ignored for memory derivation (by design — only
+      // text parts produce derivable memory units).
+      await memFetch("POST", "/v1/messages", p, {
         streamId: ch.channelId,
         streamType: "channel",
         parts: [
           { type: "text", payload: { text: "Sprint 42 summary" } },
           { type: "ui", payload: { catalog: "shadcn", spec: dashboardSpec() } },
         ],
-        idempotencyKey: "sk-ui-1",
+        idempotencyKey: "mem-ui-1",
       });
 
-      const { body: knowledge } = await skFetch<{
-        entries: Array<{ id: string; promoted: boolean; text: string }>;
-      }>("GET", `/v1/knowledge?streamId=${ch.channelId}`, p);
+      const { body: memory } = await memFetch<{
+        units: Array<{ id: string; promoted: boolean; canonicalText: string }>;
+      }>("GET", `/v1/memory?streamId=${ch.channelId}`, p);
 
-      // scoped-knowledge indexes the text part; the ui part is ignored (by design)
-      expect(knowledge.entries.length).toBeGreaterThanOrEqual(1);
-      expect(knowledge.entries.some((e) => e.text.includes("Sprint 42"))).toBe(true);
+      expect(memory.units.length).toBeGreaterThanOrEqual(1);
+      expect(memory.units.some((u) => u.canonicalText.includes("Sprint 42"))).toBe(true);
     } finally {
       await srv.close();
     }

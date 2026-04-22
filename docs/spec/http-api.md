@@ -432,55 +432,137 @@ are the recommended way to attach files to conversations; messages stay
 small and bytes stay behind the permissioned `GET /v1/artifacts/:id/content`
 endpoint.
 
-## Knowledge (provided by the `scoped-knowledge` plugin)
+## Memory (provided by the `memory` plugin)
 
-The `scoped-knowledge` plugin ships in `src/plugins/scoped-knowledge.ts`
-and enables three routes when added to `config.plugins`. Entries are
-derived from `message.appended` events; the source stream's visibility is
-snapshotted at insertion so derived data can never widen retroactively.
-Plugins that implement similar features SHOULD follow the same contract.
+The `memory` plugin ships in `src/plugins/memory.ts` and enables five
+routes when added to `config.plugins`. **Memory units** are deduplicated,
+keyword-tagged projections of text parts from `message.appended` events
+— not verbatim copies. Identical text in the same stream collapses to a
+single unit with multiple provenance edges.
 
-### `GET /v1/knowledge?streamId=...`
+The source `streamId`, `streamType`, and `visibility` are snapshotted at
+insertion time. Reads delegate to the core `assertCanReadStream`; promotion
+goes through `MessageLayer.recordMemoryPromotion`, which emits
+`memory.promoted` and writes it to the per-org hash-chained audit log.
 
-List derived entries attached to a stream. Requires read access to the
-source stream (privacy delegated to the core service).
+### `GET /v1/memory?streamId=...`
+
+List memory units bound to a stream. Requires read access to the source
+stream (privacy delegated to the core service).
 
 **Query**
-| Param                         | Type    | Default | Description |
-|-------------------------------|---------|---------|-------------|
-| streamId                      | string  | —       | Required unless `includePromotedElsewhere=true`. |
-| includePromotedElsewhere      | boolean | `false` | When `true` (without `streamId`), returns all org-promoted entries. |
+| Param     | Type    | Default | Description |
+|-----------|---------|---------|-------------|
+| streamId  | string  | —       | Required unless `promoted=true`. |
+| promoted  | boolean | `false` | When `true` (with no `streamId`) returns all org-wide promoted units; when `true` *and* `streamId` is given, restricts to promoted units inside that stream. |
 
-**Response** `200` — `{ "entries": KnowledgeEntry[] }`
+**Response** `200` — `{ "units": MemoryUnit[] }`
 
-### `GET /v1/knowledge/:entryId`
+### `GET /v1/memory/search?q=...`
 
-Fetch a single entry. Non-promoted entries require read access to the
-source stream; promoted entries are readable by any org member.
+Lexical search across every memory unit the principal can read (their
+visible streams + org-wide promoted units). Returns ranked hits with
+short snippet highlights.
 
-### `POST /v1/knowledge/:entryId/promote`
+**Query**
+| Param     | Type    | Default | Description |
+|-----------|---------|---------|-------------|
+| q         | string  | —       | Required search query. |
+| streamId  | string  | —       | When provided, restricts search to that stream (still privacy-checked). |
+| limit     | number  | `20`    | Max hits, capped at 100. |
 
-Promote an entry org-wide. Requires `knowledge:promote` (scope or grant
-on the org). Calls `MessageLayer.recordKnowledgePromotion`, which emits
-`knowledge.promoted` on the shared bus and into the audit log; the
-plugin listens and flips its local `promoted` bit in response.
+**Response** `200` — `{ "query": "...", "hits": MemoryHit[] }`
+
+### `GET /v1/memory/:memoryId`
+
+Fetch a single memory unit. Non-promoted units require read access to the
+source stream; promoted units are readable by any org member.
+
+### `POST /v1/memory/:memoryId/promote`
+
+Promote a unit org-wide. Requires `memory:promote` (scope or grant on
+the org). Calls `MessageLayer.recordMemoryPromotion`, which emits
+`memory.promoted` on the shared bus and into the audit log; the plugin
+listens and flips its local `promoted` bit in response.
 
 **Request**
 | Field    | Type   | Required | Description |
 |----------|--------|----------|-------------|
 | summary  | string | no       | Free-form annotation recorded with the promotion event. |
 
-**Response** `200` — `{ "entry": KnowledgeEntry }`
+**Response** `200` — `{ "unit": MemoryUnit }`
 
-`KnowledgeEntry` shape:
+`MemoryUnit` shape:
 ```json
 {
-  "id": "...", "orgId": "...", "sourceStreamId": "...", "sourceStreamType": "channel",
-  "sourceMessageId": "...", "sourceVisibility": "private|public",
-  "createdByActorId": "...", "text": "...",
+  "id": "...", "orgId": "...",
+  "sourceStreamId": "...", "sourceStreamType": "channel",
+  "sourceVisibility": "private|public",
+  "canonicalText": "...", "summary": "...", "keywords": ["..."],
+  "createdByActorId": "...",
+  "sourceMessageIds": ["...", "..."],
   "promoted": true, "promotedAt": "...", "promotedByActorId": "...",
-  "promotionSummary": "...", "createdAt": "..."
+  "promotionSummary": "...",
+  "createdAt": "...", "updatedAt": "..."
 }
+```
+
+`MemoryHit` shape:
+```json
+{ "unit": MemoryUnit, "score": 8.2, "highlights": ["…snippet…"] }
+```
+
+## Search (provided by the `search` plugin)
+
+The `search` plugin ships in `src/plugins/search.ts` and enables two
+routes when added to `config.plugins`. It maintains a derived index of
+the entities the message-layer manages — actors (`human`, `agent`, `app`),
+channels, threads, messages, and (when the `memory` plugin is enabled)
+memory units — and serves privacy-filtered lexical queries across all of
+them in a single request.
+
+Every result is filtered through the same core checks the rest of the
+system uses (`assertCanReadStream` for stream-scoped entities, org
+membership for actors, the promotion bit for memory).
+
+### `GET /v1/search?q=...`
+
+Mixed-entity ranked search.
+
+**Query**
+| Param         | Type     | Default | Description |
+|---------------|----------|---------|-------------|
+| q             | string   | —       | Required search query. |
+| entityTypes   | csv      | —       | Comma-separated subset of `actor,channel,thread,message,memory`. |
+| streamId      | string   | —       | Restrict stream-scoped hits to one stream. |
+| actorType     | enum     | —       | `human` \| `agent` \| `app`. Restricts `actor` hits. |
+| limit         | number   | `20`    | Max hits, capped at 100. |
+
+**Response** `200` — `{ "query": "...", "hits": SearchHit[] }`
+
+### `GET /v1/search/suggest?q=...`
+
+Lightweight autosuggest for actors, channels, and threads. Designed for
+command-bar UX. Capped at 20 suggestions.
+
+**Response** `200` — `{ "query": "...", "suggestions": SearchSuggestion[] }`
+
+`SearchHit` shape:
+```json
+{
+  "documentId": "...", "entityType": "actor|channel|thread|message|memory",
+  "entityId": "...", "score": 7.4, "title": "...", "snippet": "...",
+  "highlights": ["..."],
+  "sourceStreamId": "..."|null, "sourceStreamType": "channel|thread"|null,
+  "sourceVisibility": "private|public"|null,
+  "promoted": false, "actorType": "human|agent|app"|null,
+  "metadata": { ... }, "updatedAt": "..."
+}
+```
+
+`SearchSuggestion` shape:
+```json
+{ "entityType": "actor", "entityId": "...", "label": "...", "actorType": "human" }
 ```
 
 ## Durable Streams (provided by the `durable-streams` plugin)

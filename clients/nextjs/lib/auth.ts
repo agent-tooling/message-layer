@@ -9,11 +9,13 @@ import {
   ensureUserPrincipal,
   getDefaultChannelId,
   listChannels,
-  listKnowledge,
+  listMemory,
   listMessages,
   listStreamArtifacts,
-  promoteKnowledge,
+  promoteMemory,
   registerArtifact,
+  searchEntities,
+  searchMemory,
 } from "@/lib/message-layer";
 import { createInvite, TEAM_CLIENT_DATA_DIR } from "@/lib/app-db";
 
@@ -114,8 +116,8 @@ export const auth = betterAuth({
           },
         },
         {
-          name: "knowledge.list",
-          description: "List scoped-knowledge entries derived from a stream",
+          name: "memory.list",
+          description: "List derived memory units for a stream",
           input: {
             type: "object",
             required: ["streamId"],
@@ -123,15 +125,51 @@ export const auth = betterAuth({
           },
         },
         {
-          name: "knowledge.promote",
+          name: "memory.search",
           description:
-            "Promote a knowledge entry org-wide (requires knowledge:promote grant)",
+            "Lexical search across memory units the agent's user can read",
           input: {
             type: "object",
-            required: ["entryId"],
+            required: ["query"],
             properties: {
-              entryId: { type: "string" },
+              query: { type: "string" },
+              streamId: { type: "string" },
+              limit: { type: "number" },
+            },
+          },
+        },
+        {
+          name: "memory.promote",
+          description:
+            "Promote a memory unit org-wide (requires memory:promote grant)",
+          input: {
+            type: "object",
+            required: ["memoryId"],
+            properties: {
+              memoryId: { type: "string" },
               summary: { type: "string" },
+            },
+          },
+        },
+        {
+          name: "search.query",
+          description:
+            "Cross-entity lexical search across actors, channels, threads, messages, and memory",
+          input: {
+            type: "object",
+            required: ["query"],
+            properties: {
+              query: { type: "string" },
+              entityTypes: {
+                type: "array",
+                items: {
+                  type: "string",
+                  enum: ["actor", "channel", "thread", "message", "memory"],
+                },
+              },
+              streamId: { type: "string" },
+              actorType: { type: "string", enum: ["human", "agent", "app"] },
+              limit: { type: "number" },
             },
           },
         },
@@ -187,15 +225,45 @@ export const auth = betterAuth({
           });
           return { artifact };
         }
-        if (capability === "knowledge.list") {
+        if (capability === "memory.list") {
           const streamId = String(args?.streamId ?? "");
-          return { entries: await listKnowledge(principal, streamId) };
+          return { units: await listMemory(principal, streamId) };
         }
-        if (capability === "knowledge.promote") {
-          const entryId = String(args?.entryId ?? "");
+        if (capability === "memory.search") {
+          const query = String(args?.query ?? "");
+          const streamId =
+            typeof args?.streamId === "string" ? args.streamId : undefined;
+          const limit = typeof args?.limit === "number" ? args.limit : undefined;
+          return await searchMemory(principal, query, { streamId, limit });
+        }
+        if (capability === "memory.promote") {
+          const memoryId = String(args?.memoryId ?? "");
           const summary =
             typeof args?.summary === "string" ? args.summary : undefined;
-          return { entry: await promoteKnowledge(principal, entryId, summary) };
+          return { unit: await promoteMemory(principal, memoryId, summary) };
+        }
+        if (capability === "search.query") {
+          const query = String(args?.query ?? "");
+          const entityTypes = Array.isArray(args?.entityTypes)
+            ? (args.entityTypes as Array<
+                "actor" | "channel" | "thread" | "message" | "memory"
+              >)
+            : undefined;
+          const streamId =
+            typeof args?.streamId === "string" ? args.streamId : undefined;
+          const actorType =
+            args?.actorType === "human" ||
+            args?.actorType === "agent" ||
+            args?.actorType === "app"
+              ? (args.actorType as "human" | "agent" | "app")
+              : undefined;
+          const limit = typeof args?.limit === "number" ? args.limit : undefined;
+          return await searchEntities(principal, query, {
+            entityTypes,
+            streamId,
+            actorType,
+            limit,
+          });
         }
         return { ok: false };
       },

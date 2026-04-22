@@ -7,8 +7,9 @@ import { apiKeyAuthPlugin } from "./plugins/api-key-auth.js";
 import { durableStreamsPlugin } from "./plugins/durable-streams.js";
 import { eventLoggerPlugin } from "./plugins/event-logger.js";
 import { healthMetaPlugin } from "./plugins/health-meta.js";
+import { memoryPlugin } from "./plugins/memory.js";
 import { requestLoggingPlugin } from "./plugins/request-logging.js";
-import { scopedKnowledgePlugin } from "./plugins/scoped-knowledge.js";
+import { searchPlugin } from "./plugins/search.js";
 import { webhookPlugin } from "./plugins/webhooks.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { durableStreamsStoragePlugin } from "./plugins/durable-streams-storage.js";
@@ -62,7 +63,8 @@ export const builtInPluginFactories: Record<string, PluginFactory> = {
   "health-meta": healthMetaPlugin,
   "api-key-header-auth": apiKeyAuthPlugin,
   "event-logger": eventLoggerPlugin,
-  "scoped-knowledge": scopedKnowledgePlugin,
+  memory: memoryPlugin,
+  search: searchPlugin,
   webhooks: webhookPlugin,
   "durable-streams": durableStreamsPlugin,
   "durable-streams-storage": durableStreamsStoragePlugin,

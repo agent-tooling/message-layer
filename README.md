@@ -241,7 +241,8 @@ import { apiKeyAuthPlugin }     from "message-layer/plugins/api-key-auth";
 import { eventLoggerPlugin }    from "message-layer/plugins/event-logger";
 import { webhookPlugin }        from "message-layer/plugins/webhooks";
 import { websocketPlugin }      from "message-layer/plugins/websocket";
-import { scopedKnowledgePlugin }from "message-layer/plugins/scoped-knowledge";
+import { memoryPlugin }         from "message-layer/plugins/memory";
+import { searchPlugin }         from "message-layer/plugins/search";
 import { durableStreamsPlugin }  from "message-layer/plugins/durable-streams";
 
 await startServer({
@@ -315,11 +316,22 @@ Delivers domain events as outbound HTTP POST requests to registered subscriber U
 - Adds `GET /v1/webhooks/subscriptions` — list subscriptions
 - Adds `PATCH /v1/webhooks/subscriptions/:id` — enable/disable
 
-#### `scoped-knowledge`
-Persists message-derived knowledge entries per stream. Every `message.appended` event is indexed; entries can be promoted org-wide.
+#### `memory`
+Derives reusable **memory units** from text parts of `message.appended` events. Units are normalized, chunked, deduplicated by content hash, and tagged with extracted keywords — never a 1:1 copy of message text. Source `streamId` / `streamType` / `visibility` are snapshotted at insert time so derived data cannot widen retroactively.
 
-- Adds `GET /v1/knowledge?streamId=…` — list knowledge entries for a stream
-- Adds `POST /v1/knowledge/:id/promote` — promote an entry org-wide (requires `knowledge:promote`)
+- Adds `GET /v1/memory?streamId=…` — list memory bound to a stream
+- Adds `GET /v1/memory?promoted=true` — list org-wide promoted memory
+- Adds `GET /v1/memory/search?q=…` — lexical search over visible memory
+- Adds `GET /v1/memory/:id` — fetch one unit (with provenance + keywords)
+- Adds `POST /v1/memory/:id/promote` — promote a unit org-wide (requires `memory:promote`)
+
+Composes optionally with the `search` plugin via `registerMemoryIndexProvider` — neither plugin requires the other.
+
+#### `search`
+Privacy-aware lexical search across actors (`human` / `agent` / `app`), channels, threads, messages, threaded messages, and (when `memory` is enabled) memory units. Results are filtered through the same core privacy checks the rest of the system uses — private messages and threads never leak to non-members.
+
+- Adds `GET /v1/search?q=…&entityTypes=…&streamId=…&actorType=…&limit=…` — mixed-entity ranked search
+- Adds `GET /v1/search/suggest?q=…` — lightweight autosuggest for actors / channels / threads
 
 #### `durable-streams`
 Append-only named streams with optional TTL, consumer checkpoints, and tail-read SSE. Useful for agent task queues and async pipelines. Chunk data is stored in SQL rows.
@@ -431,8 +443,12 @@ Every authenticated request carries an `x-principal` JSON header. See [`docs/spe
 | `POST` | `/v1/webhooks/subscriptions` | Create webhook subscription (`webhooks` plugin) |
 | `GET` | `/v1/webhooks/subscriptions` | List webhook subscriptions (`webhooks` plugin) |
 | `PATCH` | `/v1/webhooks/subscriptions/:id` | Enable/disable webhook (`webhooks` plugin) |
-| `GET` | `/v1/knowledge?streamId=…` | List knowledge entries (`scoped-knowledge` plugin) |
-| `POST` | `/v1/knowledge/:id/promote` | Promote knowledge org-wide (`scoped-knowledge` plugin) |
+| `GET` | `/v1/memory?streamId=…` | List memory units bound to a stream (`memory` plugin) |
+| `GET` | `/v1/memory/search?q=…` | Lexical search over visible memory (`memory` plugin) |
+| `GET` | `/v1/memory/:id` | Fetch one memory unit (`memory` plugin) |
+| `POST` | `/v1/memory/:id/promote` | Promote memory org-wide (`memory` plugin) |
+| `GET` | `/v1/search?q=…` | Mixed-entity privacy-aware search (`search` plugin) |
+| `GET` | `/v1/search/suggest?q=…` | Autosuggest for actors / channels / threads (`search` plugin) |
 
 `MessagePart.type` includes `text`, `mention`, `command`, `tool_call`,
 `tool_result`, `artifact`, `approval_request`, `approval_response`, and `ui`.

@@ -114,20 +114,55 @@ export type ArtifactRecord = {
   deleted: boolean;
 };
 
-export type KnowledgeEntry = {
+export type MemoryUnit = {
   id: string;
   orgId: string;
   sourceStreamId: string;
   sourceStreamType: "channel" | "thread";
-  sourceMessageId: string;
   sourceVisibility: "private" | "public";
+  canonicalText: string;
+  summary: string;
+  keywords: string[];
   createdByActorId: string;
-  text: string;
+  sourceMessageIds: string[];
   promoted: boolean;
   promotedAt: string | null;
   promotedByActorId: string | null;
   promotionSummary: string | null;
   createdAt: string;
+  updatedAt: string;
+};
+
+export type MemoryHit = {
+  unit: MemoryUnit;
+  score: number;
+  highlights: string[];
+};
+
+export type SearchEntityType = "actor" | "channel" | "thread" | "message" | "memory";
+
+export type SearchHit = {
+  documentId: string;
+  entityType: SearchEntityType;
+  entityId: string;
+  score: number;
+  title: string;
+  snippet: string;
+  highlights: string[];
+  sourceStreamId: string | null;
+  sourceStreamType: "channel" | "thread" | null;
+  sourceVisibility: "private" | "public" | null;
+  promoted: boolean;
+  actorType: "human" | "agent" | "app" | null;
+  metadata: Record<string, unknown>;
+  updatedAt: string;
+};
+
+export type SearchSuggestion = {
+  entityType: SearchEntityType;
+  entityId: string;
+  label: string;
+  actorType: "human" | "agent" | "app" | null;
 };
 
 export type WebhookSubscription = {
@@ -621,23 +656,96 @@ export class MessageLayerClient {
     return result.rows;
   }
 
-  // ── Knowledge (scoped-knowledge plugin) ───────────────────────────────────
+  // ── Memory (memory plugin) ────────────────────────────────────────────────
 
-  /** List knowledge entries for a stream. Requires the `scoped-knowledge` plugin. */
-  async listKnowledge(streamId: string): Promise<KnowledgeEntry[]> {
-    const result = await this.request<{ entries: KnowledgeEntry[] }>(
-      `/v1/knowledge?streamId=${encodeURIComponent(streamId)}`,
+  /**
+   * List derived memory units bound to a specific stream. Requires read
+   * access to the source stream (privacy delegated to the core service).
+   */
+  async listMemory(streamId: string): Promise<MemoryUnit[]> {
+    const result = await this.request<{ units: MemoryUnit[] }>(
+      `/v1/memory?streamId=${encodeURIComponent(streamId)}`,
     );
-    return result.entries;
+    return result.units;
   }
 
-  /** Promote a knowledge entry org-wide. Requires `knowledge:promote`. */
-  async promoteKnowledge(entryId: string, summary?: string): Promise<KnowledgeEntry> {
-    const result = await this.request<{ entry: KnowledgeEntry }>(
-      `/v1/knowledge/${entryId}/promote`,
+  /**
+   * List org-wide promoted memory units. Readable by any org member; the
+   * source stream's visibility is intentionally bypassed because promotion
+   * went through the audited `recordMemoryPromotion` core hook.
+   */
+  async listPromotedMemory(): Promise<MemoryUnit[]> {
+    const result = await this.request<{ units: MemoryUnit[] }>(`/v1/memory?promoted=true`);
+    return result.units;
+  }
+
+  /**
+   * Search derived memory across every stream the principal can read,
+   * plus org-wide promoted units. Lexical baseline ranker; results respect
+   * source-stream visibility on every read.
+   */
+  async searchMemory(
+    query: string,
+    options?: { streamId?: string; limit?: number },
+  ): Promise<{ query: string; hits: MemoryHit[] }> {
+    const params = new URLSearchParams({ q: query });
+    if (options?.streamId) params.set("streamId", options.streamId);
+    if (options?.limit != null) params.set("limit", String(options.limit));
+    return this.request(`/v1/memory/search?${params.toString()}`);
+  }
+
+  /** Fetch a single memory unit by id. */
+  async getMemory(memoryId: string): Promise<MemoryUnit> {
+    const result = await this.request<{ unit: MemoryUnit }>(`/v1/memory/${memoryId}`);
+    return result.unit;
+  }
+
+  /** Promote a memory unit org-wide. Requires `memory:promote`. */
+  async promoteMemory(memoryId: string, summary?: string): Promise<MemoryUnit> {
+    const result = await this.request<{ unit: MemoryUnit }>(
+      `/v1/memory/${memoryId}/promote`,
       { method: "POST", body: { summary } },
     );
-    return result.entry;
+    return result.unit;
+  }
+
+  // ── Search (search plugin) ────────────────────────────────────────────────
+
+  /**
+   * Mixed-entity search across actors, channels, threads, messages, and
+   * (when the memory plugin is enabled) derived memory units. All results
+   * are privacy-filtered against the principal.
+   */
+  async search(
+    query: string,
+    options?: {
+      entityTypes?: SearchEntityType[];
+      streamId?: string;
+      actorType?: "human" | "agent" | "app";
+      limit?: number;
+    },
+  ): Promise<{ query: string; hits: SearchHit[] }> {
+    const params = new URLSearchParams({ q: query });
+    if (options?.entityTypes && options.entityTypes.length > 0) {
+      params.set("entityTypes", options.entityTypes.join(","));
+    }
+    if (options?.streamId) params.set("streamId", options.streamId);
+    if (options?.actorType) params.set("actorType", options.actorType);
+    if (options?.limit != null) params.set("limit", String(options.limit));
+    return this.request(`/v1/search?${params.toString()}`);
+  }
+
+  /**
+   * Lightweight autosuggest for actors, channels, and threads. Designed
+   * for command-bar UX where you want fast, capped results.
+   */
+  async searchSuggest(
+    query: string,
+    options?: { limit?: number },
+  ): Promise<{ query: string; suggestions: SearchSuggestion[] }> {
+    const params = new URLSearchParams({ q: query });
+    if (options?.limit != null) params.set("limit", String(options.limit));
+    return this.request(`/v1/search/suggest?${params.toString()}`);
   }
 
   // ── Webhooks (webhooks plugin) ─────────────────────────────────────────────

@@ -451,29 +451,102 @@ type AuditRow = {
 
 ---
 
-### Knowledge (scoped-knowledge plugin)
+### Memory (memory plugin)
 
-These methods require the `scoped-knowledge` plugin to be enabled on the server.
+These methods require the `memory` plugin to be enabled on the server.
 
-#### `listKnowledge(streamId: string): Promise<KnowledgeEntry[]>`
+#### `listMemory(streamId: string): Promise<MemoryUnit[]>`
 
-#### `promoteKnowledge(entryId: string, summary?: string): Promise<KnowledgeEntry>`
+List derived memory units bound to a stream the principal can read.
+
+#### `listPromotedMemory(): Promise<MemoryUnit[]>`
+
+List org-wide promoted memory units.
+
+#### `searchMemory(query: string, options?: { streamId?: string; limit?: number }): Promise<{ query: string; hits: MemoryHit[] }>`
+
+Lexical search across memory units the principal can see (their visible
+streams + org-wide promoted units).
+
+#### `getMemory(memoryId: string): Promise<MemoryUnit>`
+
+#### `promoteMemory(memoryId: string, summary?: string): Promise<MemoryUnit>`
+
+Requires `memory:promote` (scope or grant on the org).
 
 ```typescript
-type KnowledgeEntry = {
+type MemoryUnit = {
   id: string;
   orgId: string;
   sourceStreamId: string;
   sourceStreamType: "channel" | "thread";
-  sourceMessageId: string;
   sourceVisibility: "private" | "public";
+  canonicalText: string;
+  summary: string;
+  keywords: string[];
   createdByActorId: string;
-  text: string;
+  sourceMessageIds: string[];
   promoted: boolean;
   promotedAt: string | null;
   promotedByActorId: string | null;
   promotionSummary: string | null;
   createdAt: string;
+  updatedAt: string;
+};
+
+type MemoryHit = {
+  unit: MemoryUnit;
+  score: number;
+  highlights: string[];
+};
+```
+
+---
+
+### Search (search plugin)
+
+These methods require the `search` plugin to be enabled on the server.
+When the `memory` plugin is also enabled, memory units are included in
+results and can be filtered with `entityTypes: ["memory"]`.
+
+#### `search(query: string, options?: SearchOptions): Promise<{ query: string; hits: SearchHit[] }>`
+
+Mixed-entity search across actors, channels, threads, messages, and
+memory units. Privacy is delegated to core `assertCanReadStream` and
+org-membership checks.
+
+#### `searchSuggest(query: string, options?: { limit?: number }): Promise<{ query: string; suggestions: SearchSuggestion[] }>`
+
+```typescript
+type SearchOptions = {
+  entityTypes?: Array<"actor" | "channel" | "thread" | "message" | "memory">;
+  streamId?: string;
+  actorType?: "human" | "agent" | "app";
+  limit?: number;
+};
+
+type SearchHit = {
+  documentId: string;
+  entityType: "actor" | "channel" | "thread" | "message" | "memory";
+  entityId: string;
+  score: number;
+  title: string;
+  snippet: string;
+  highlights: string[];
+  sourceStreamId: string | null;
+  sourceStreamType: "channel" | "thread" | null;
+  sourceVisibility: "private" | "public" | null;
+  promoted: boolean;
+  actorType: "human" | "agent" | "app" | null;
+  metadata: Record<string, unknown>;
+  updatedAt: string;
+};
+
+type SearchSuggestion = {
+  entityType: "actor" | "channel" | "thread" | "message" | "memory";
+  entityId: string;
+  label: string;
+  actorType: "human" | "agent" | "app" | null;
 };
 ```
 
@@ -613,7 +686,11 @@ import type {
   RegisterArtifactInput,
   ArtifactRecord,
   AuditRow,
-  KnowledgeEntry,
+  MemoryUnit,
+  MemoryHit,
+  SearchEntityType,
+  SearchHit,
+  SearchSuggestion,
   WebhookSubscription,
   WebSocketEvent,
   WebSocketHandle,

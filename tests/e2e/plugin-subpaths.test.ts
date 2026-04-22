@@ -21,8 +21,9 @@ import { apiKeyAuthPlugin } from "../../src/plugins/api-key-auth.js";
 import { durableStreamsPlugin } from "../../src/plugins/durable-streams.js";
 import { eventLoggerPlugin } from "../../src/plugins/event-logger.js";
 import { healthMetaPlugin } from "../../src/plugins/health-meta.js";
+import { memoryPlugin } from "../../src/plugins/memory.js";
 import { requestLoggingPlugin } from "../../src/plugins/request-logging.js";
-import { scopedKnowledgePlugin } from "../../src/plugins/scoped-knowledge.js";
+import { searchPlugin } from "../../src/plugins/search.js";
 import { webhookPlugin } from "../../src/plugins/webhooks.js";
 import { websocketPlugin } from "../../src/plugins/websocket.js";
 
@@ -43,8 +44,9 @@ describe("plugin factory names", () => {
     expect(durableStreamsPlugin().name).toBe("durable-streams");
     expect(eventLoggerPlugin().name).toBe("event-logger");
     expect(healthMetaPlugin().name).toBe("health-meta");
+    expect(memoryPlugin().name).toBe("memory");
     expect(requestLoggingPlugin().name).toBe("request-logging");
-    expect(scopedKnowledgePlugin().name).toBe("scoped-knowledge");
+    expect(searchPlugin().name).toBe("search");
     expect(webhookPlugin().name).toBe("webhooks");
     expect(websocketPlugin().name).toBe("websocket");
   });

@@ -8,10 +8,13 @@ import {
   type ChannelMember,
   type CreateGrantInput,
   type GrantRecord,
-  type KnowledgeEntry,
+  type MemoryHit,
+  type MemoryUnit,
   type OrgMember,
   type PermissionRequest,
   type ResolveOptions,
+  type SearchHit,
+  type SearchSuggestion,
   type Thread,
   type WebhookSubscription,
   type RegisteredCommand,
@@ -43,10 +46,13 @@ export type {
   Channel,
   ChannelMember,
   GrantRecord as ActorEffectiveGrant,
-  KnowledgeEntry as MlKnowledgeEntry,
+  MemoryHit as MlMemoryHit,
+  MemoryUnit as MlMemoryUnit,
   OrgMember,
   PermissionRequest as PermissionRequestRow,
   ResolveOptions,
+  SearchHit as MlSearchHit,
+  SearchSuggestion as MlSearchSuggestion,
   Thread,
   WebhookSubscription as MlWebhookSubscription,
 };
@@ -571,19 +577,48 @@ export async function listStreamArtifacts(
   return mlClient(principal).listStreamArtifacts(streamId);
 }
 
-export async function listKnowledge(
+export async function listMemory(
   principal: MlPrincipal,
   streamId: string,
-): Promise<KnowledgeEntry[]> {
-  return mlClient(principal).listKnowledge(streamId);
+): Promise<MemoryUnit[]> {
+  return mlClient(principal).listMemory(streamId);
 }
 
-export async function promoteKnowledge(
+export async function promoteMemory(
   principal: MlPrincipal,
-  entryId: string,
+  memoryId: string,
   summary?: string,
-): Promise<KnowledgeEntry> {
-  return mlClient(principal).promoteKnowledge(entryId, summary);
+): Promise<MemoryUnit> {
+  return mlClient(principal).promoteMemory(memoryId, summary);
+}
+
+export async function searchMemory(
+  principal: MlPrincipal,
+  query: string,
+  options?: { streamId?: string; limit?: number },
+): Promise<{ query: string; hits: MemoryHit[] }> {
+  return mlClient(principal).searchMemory(query, options);
+}
+
+export async function searchEntities(
+  principal: MlPrincipal,
+  query: string,
+  options?: {
+    entityTypes?: Array<"actor" | "channel" | "thread" | "message" | "memory">;
+    streamId?: string;
+    actorType?: "human" | "agent" | "app";
+    limit?: number;
+  },
+): Promise<{ query: string; hits: SearchHit[] }> {
+  return mlClient(principal).search(query, options);
+}
+
+export async function searchSuggest(
+  principal: MlPrincipal,
+  query: string,
+  options?: { limit?: number },
+): Promise<{ query: string; suggestions: SearchSuggestion[] }> {
+  return mlClient(principal).searchSuggest(query, options);
 }
 
 export async function listWebhookSubscriptions(

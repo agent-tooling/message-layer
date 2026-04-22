@@ -53,7 +53,7 @@ const EVENT_TYPES = [
   "privacy_policy.updated",
   "artifact.registered",
   "artifact.deleted",
-  "knowledge.promoted",
+  "memory.promoted",
   "audit.logged",
   "client.registered",
 ] as const;
@@ -156,6 +156,7 @@ function actorAppearsIn(row: AuditRow, target: string): boolean {
     p.deletedByActorId,
     p.addedByActorId,
     p.removedByActorId,
+    p.indexedByActorId,
   ];
   for (const c of candidates) {
     if (typeof c === "string" && c === target) return true;
@@ -2218,30 +2219,30 @@ export class MessageLayer {
     return deriveStorageKey(row.orgId, row.id);
   }
 
-  // ── knowledge (plugin hooks) ─────────────────────────────────────────────
+  // ── memory (plugin hooks) ────────────────────────────────────────────────
 
   /**
-   * Record that a plugin has promoted a derived knowledge entry beyond the
+   * Record that a plugin has promoted a derived memory unit beyond the
    * scope of its source. Plugins own their own storage; this hook exists
    * solely so the event lands in the core bus + per-org hash-chained audit
    * log (AGENTS.md rule #12 "core emits events, plugins consume").
    *
    * The caller must already be authorized to read the source stream and
-   * must hold `knowledge:promote` (scope or org-level grant). The actual
+   * must hold `memory:promote` (scope or org-level grant). The actual
    * visibility change happens inside the plugin, driven by the emitted
-   * `knowledge.promoted` event.
+   * `memory.promoted` event.
    */
-  async recordKnowledgePromotion(
+  async recordMemoryPromotion(
     principal: Principal,
     input: {
-      entryId: string;
+      memoryId: string;
       sourceStreamId: string;
       sourceStreamType: StreamType;
       summary?: string;
     },
   ): Promise<DomainEvent> {
     await this.assertOrgActor(principal);
-    if (!input.entryId) throw new ValidationError("entryId is required");
+    if (!input.memoryId) throw new ValidationError("memoryId is required");
     if (!input.sourceStreamId) throw new ValidationError("sourceStreamId is required");
     streamTypeSchema.parse(input.sourceStreamType);
 
@@ -2251,11 +2252,11 @@ export class MessageLayer {
     await this.assertStreamReadable(principal, input.sourceStreamId, input.sourceStreamType);
 
     if (
-      !principal.scopes.includes("knowledge:promote") &&
-      !(await this.hasGrant(principal, "knowledge:promote", "org", principal.orgId))
+      !principal.scopes.includes("memory:promote") &&
+      !(await this.hasGrant(principal, "memory:promote", "org", principal.orgId))
     ) {
-      throw new PermissionError("missing knowledge:promote", {
-        capability: "knowledge:promote",
+      throw new PermissionError("missing memory:promote", {
+        capability: "memory:promote",
         resourceType: "org",
         resourceId: principal.orgId,
       });
@@ -2265,10 +2266,10 @@ export class MessageLayer {
       this.emit(tx, {
         orgId: principal.orgId,
         streamId: input.sourceStreamId,
-        eventType: "knowledge.promoted",
+        eventType: "memory.promoted",
         payload: {
           orgId: principal.orgId,
-          entryId: input.entryId,
+          memoryId: input.memoryId,
           sourceStreamId: input.sourceStreamId,
           sourceStreamType: input.sourceStreamType,
           promotedByActorId: principal.actorId,

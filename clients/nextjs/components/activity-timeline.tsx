@@ -209,10 +209,10 @@ function describe(
         summary: `Artifact deleted by ${actor(p.deletedByActorId) ?? "?"}`,
         tone: "bg-red-500/20 text-red-200",
       };
-    case "knowledge.promoted":
+    case "memory.promoted":
       return {
         icon: "★",
-        summary: `Knowledge promoted by ${actor(p.promotedByActorId) ?? "?"}`,
+        summary: `Memory promoted by ${actor(p.promotedByActorId) ?? "?"}`,
         tone: "bg-yellow-500/20 text-yellow-200",
       };
     case "cursor.updated":

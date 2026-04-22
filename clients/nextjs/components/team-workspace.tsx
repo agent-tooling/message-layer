@@ -64,6 +64,29 @@ type RegisteredCommand = {
   ownerActorId: string;
   description: string | null;
 };
+type MemoryUnit = {
+  id: string;
+  canonicalText: string;
+  summary: string;
+  keywords: string[];
+  sourceVisibility: "private" | "public";
+  promoted: boolean;
+  promotedAt: string | null;
+  promotionSummary: string | null;
+  sourceMessageIds: string[];
+};
+type SearchHit = {
+  documentId: string;
+  entityType: "actor" | "channel" | "thread" | "message" | "memory";
+  entityId: string;
+  score: number;
+  title: string;
+  snippet: string;
+  highlights: string[];
+  promoted: boolean;
+  actorType: "human" | "agent" | "app" | null;
+  sourceStreamId: string | null;
+};
 
 export function TeamWorkspace() {
   const { data: session } = authClient.useSession();
@@ -88,6 +111,13 @@ export function TeamWorkspace() {
   const [webhooks, setWebhooks] = useState<WebhookSubscription[]>([]);
   const [webhooksAvailable, setWebhooksAvailable] = useState(true);
   const [commands, setCommands] = useState<RegisteredCommand[]>([]);
+  const [memoryUnits, setMemoryUnits] = useState<MemoryUnit[]>([]);
+  const [memoryAvailable, setMemoryAvailable] = useState(true);
+  const [memoryDenied, setMemoryDenied] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+  const [searchAvailable, setSearchAvailable] = useState(true);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const activeThreads = threadsByChannel[activeChannelId] ?? [];
@@ -243,6 +273,49 @@ export function TeamWorkspace() {
     setCommands(result.commands);
   }
 
+  async function refreshMemory(channelId: string) {
+    const result = await api<{
+      units: MemoryUnit[];
+      available?: boolean;
+      denied?: boolean;
+    }>(`/api/team/memory?streamId=${encodeURIComponent(channelId)}`);
+    setMemoryUnits(result.units);
+    setMemoryAvailable(result.available !== false);
+    setMemoryDenied(result.denied === true);
+  }
+
+  async function promoteMemoryUnit(memoryId: string) {
+    if (!activeChannelId) return;
+    try {
+      await api(`/api/team/memory/${memoryId}/promote`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      await refreshMemory(activeChannelId);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function runSearch(query: string) {
+    const trimmed = query.trim();
+    if (trimmed.length === 0) {
+      setSearchHits([]);
+      return;
+    }
+    try {
+      const result = await api<{
+        hits: SearchHit[];
+        available?: boolean;
+      }>(`/api/team/search?q=${encodeURIComponent(trimmed)}&limit=12`);
+      setSearchHits(result.hits);
+      setSearchAvailable(result.available !== false);
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   useEffect(() => {
     if (!session) return;
     void api<{ ok: true; defaultChannelId: string; actorId: string }>(
@@ -279,6 +352,9 @@ export function TeamWorkspace() {
     void refreshCommands(activeChannelId).catch((err) =>
       setError((err as Error).message),
     );
+    void refreshMemory(activeChannelId).catch(() => {
+      // memory plugin is optional
+    });
     const timer = setInterval(() => {
       void refreshMessages(activeChannelId).catch(() => {});
       void refreshThreads(activeChannelId).catch(() => {});
@@ -286,9 +362,18 @@ export function TeamWorkspace() {
       void refreshDirectory().catch(() => {});
       void refreshWebhooks().catch(() => {});
       void refreshCommands(activeChannelId).catch(() => {});
+      void refreshMemory(activeChannelId).catch(() => {});
     }, 2200);
     return () => clearInterval(timer);
   }, [activeChannelId]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const handle = setTimeout(() => {
+      void runSearch(searchQuery);
+    }, 200);
+    return () => clearTimeout(handle);
+  }, [searchQuery, searchOpen]);
 
   // If the open thread vanishes from the active channel (e.g. channel
   // switched, thread deleted server-side) clear the selection so stale
@@ -717,6 +802,62 @@ export function TeamWorkspace() {
 
         <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
           <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
+            Memory
+          </p>
+          {!memoryAvailable ? (
+            <p className="mt-2">Memory plugin is not enabled.</p>
+          ) : memoryDenied ? (
+            <p className="mt-2">No access to this channel&apos;s memory.</p>
+          ) : memoryUnits.length === 0 ? (
+            <p className="mt-2">No derived memory yet for this channel.</p>
+          ) : (
+            <ul className="mt-2 space-y-2">
+              {memoryUnits.map((unit) => (
+                <li
+                  key={unit.id}
+                  className="rounded-md border border-zinc-800 bg-zinc-900/80 px-2 py-2"
+                >
+                  <p className="break-words text-zinc-200">{unit.summary}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] uppercase tracking-wide">
+                    <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-zinc-400">
+                      {unit.sourceVisibility}
+                    </span>
+                    {unit.promoted ? (
+                      <span className="rounded bg-yellow-500/20 px-1.5 py-0.5 text-yellow-200">
+                        ★ promoted
+                      </span>
+                    ) : null}
+                    <span className="text-zinc-500">
+                      {unit.sourceMessageIds.length} src
+                    </span>
+                  </div>
+                  {unit.keywords.length > 0 ? (
+                    <p className="mt-1 truncate text-[10px] text-zinc-500">
+                      kw: {unit.keywords.slice(0, 5).join(", ")}
+                    </p>
+                  ) : null}
+                  {!unit.promoted ? (
+                    <button
+                      type="button"
+                      onClick={() => void promoteMemoryUnit(unit.id)}
+                      className="mt-1 w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[11px] text-zinc-200 transition hover:bg-zinc-800"
+                    >
+                      Promote org-wide
+                    </button>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="mt-3 border-t border-zinc-800/60 pt-2 text-[11px] text-zinc-500">
+            Derived from <code>message.appended</code> events. Source
+            visibility is snapshotted; promotion requires{" "}
+            <code>memory:promote</code>.
+          </p>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3 text-xs text-zinc-400">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-300">
             Webhooks
           </p>
           {!webhooksAvailable ? (
@@ -765,6 +906,79 @@ export function TeamWorkspace() {
               {channels.find((channel) => channel.id === activeChannelId)
                 ?.name ?? "Select a channel"}
             </p>
+          </div>
+          <div className="relative mx-4 hidden max-w-md flex-1 md:block">
+            <input
+              type="search"
+              placeholder="Search actors, channels, threads, messages, memory…"
+              value={searchQuery}
+              onFocus={() => setSearchOpen(true)}
+              onChange={(event) => {
+                setSearchQuery(event.target.value);
+                setSearchOpen(true);
+              }}
+              onBlur={() => setTimeout(() => setSearchOpen(false), 200)}
+              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 outline-none transition focus:border-emerald-500/70"
+            />
+            {searchOpen && searchQuery.trim().length > 0 ? (
+              <div className="absolute left-0 right-0 z-30 mt-1 max-h-96 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-950 shadow-xl shadow-black/60">
+                {!searchAvailable ? (
+                  <p className="px-4 py-3 text-xs text-zinc-500">
+                    Search plugin is not enabled.
+                  </p>
+                ) : searchHits.length === 0 ? (
+                  <p className="px-4 py-3 text-xs text-zinc-500">No matches.</p>
+                ) : (
+                  <ul className="divide-y divide-zinc-900">
+                    {searchHits.map((hit) => (
+                      <li key={hit.documentId}>
+                        <button
+                          type="button"
+                          className="block w-full px-4 py-2 text-left text-sm text-zinc-200 transition hover:bg-zinc-900"
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={() => {
+                            if (hit.entityType === "channel") {
+                              setActiveChannelId(hit.entityId);
+                              setSearchOpen(false);
+                            } else if (
+                              (hit.entityType === "message" ||
+                                hit.entityType === "memory") &&
+                              hit.sourceStreamId &&
+                              channels.some(
+                                (c) => c.id === hit.sourceStreamId,
+                              )
+                            ) {
+                              setActiveChannelId(hit.sourceStreamId);
+                              setSearchOpen(false);
+                            }
+                          }}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+                              {hit.entityType}
+                              {hit.actorType ? `·${hit.actorType}` : ""}
+                            </span>
+                            <span className="truncate font-medium">
+                              {hit.title}
+                            </span>
+                            {hit.promoted ? (
+                              <span className="text-[10px] text-yellow-300">
+                                ★
+                              </span>
+                            ) : null}
+                          </div>
+                          {hit.snippet ? (
+                            <p className="mt-1 truncate text-[11px] text-zinc-500">
+                              {hit.snippet}
+                            </p>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
           </div>
           <div className="flex items-center gap-2">
             {canResolveApprovals && approvals.length > 0 ? (

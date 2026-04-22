@@ -42,9 +42,13 @@
       "import": "./dist/plugins/request-logging.js",
       "types": "./dist/plugins/request-logging.d.ts"
     },
-    "./plugins/scoped-knowledge": {
-      "import": "./dist/plugins/scoped-knowledge.js",
-      "types": "./dist/plugins/scoped-knowledge.d.ts"
+    "./plugins/memory": {
+      "import": "./dist/plugins/memory.js",
+      "types": "./dist/plugins/memory.d.ts"
+    },
+    "./plugins/search": {
+      "import": "./dist/plugins/search.js",
+      "types": "./dist/plugins/search.d.ts"
     },
     "./plugins/webhooks": {
       "import": "./dist/plugins/webhooks.js",
