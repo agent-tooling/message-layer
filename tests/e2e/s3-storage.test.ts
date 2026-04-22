@@ -101,7 +101,6 @@ describe("artifact upload/download with S3 backend (FakeS3Server)", () => {
       logger: () => {},
       config: {
         port: 0,
-        websocket: false,
         storage: { adapter: "pglite", path: `memory://s3-test-${Math.random().toString(16).slice(2)}` },
         artifacts: {
           kind: "s3",

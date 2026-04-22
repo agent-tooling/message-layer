@@ -21,7 +21,6 @@ import { apiKeyAuthPlugin } from "../../src/plugins/api-key-auth.js";
 import { durableStreamsPlugin } from "../../src/plugins/durable-streams.js";
 import { eventLoggerPlugin } from "../../src/plugins/event-logger.js";
 import { healthMetaPlugin } from "../../src/plugins/health-meta.js";
-import { inMemoryKnowledgePlugin } from "../../src/plugins/in-memory-knowledge.js";
 import { requestLoggingPlugin } from "../../src/plugins/request-logging.js";
 import { scopedKnowledgePlugin } from "../../src/plugins/scoped-knowledge.js";
 import { webhookPlugin } from "../../src/plugins/webhooks.js";
@@ -44,7 +43,6 @@ describe("plugin factory names", () => {
     expect(durableStreamsPlugin().name).toBe("durable-streams");
     expect(eventLoggerPlugin().name).toBe("event-logger");
     expect(healthMetaPlugin().name).toBe("health-meta");
-    expect(inMemoryKnowledgePlugin().name).toBe("in-memory-knowledge");
     expect(requestLoggingPlugin().name).toBe("request-logging");
     expect(scopedKnowledgePlugin().name).toBe("scoped-knowledge");
     expect(webhookPlugin().name).toBe("webhooks");
@@ -107,7 +105,6 @@ describe("plugin subpaths via startServer()", () => {
         ...defaultServerConfig({}),
         plugins: [requestLoggingPlugin({ prefix: "[subpath-test]" })],
         port: 0,
-        websocket: false,
       },
     });
     await fetch(`${server.address}/health`);
@@ -122,7 +119,6 @@ describe("plugin subpaths via startServer()", () => {
         ...defaultServerConfig({}),
         plugins: [healthMetaPlugin({ version: "subpath-1.0" })],
         port: 0,
-        websocket: false,
       },
     });
     const res = await fetch(`${server.address}/health/meta`);
@@ -141,7 +137,6 @@ describe("plugin subpaths via startServer()", () => {
         ...defaultServerConfig({}),
         plugins: [apiKeyAuthPlugin({ envKey: "SUBPATH_KEY", strict: true })],
         port: 0,
-        websocket: false,
       },
       env: { SUBPATH_KEY: secret },
     });
@@ -171,7 +166,6 @@ describe("plugin subpaths via startServer()", () => {
         ...defaultServerConfig({}),
         plugins: [apiKeyAuthPlugin({ envKey: "DEFINITELY_MISSING_KEY_123", strict: true })],
         port: 0,
-        websocket: false,
       },
       env: {},
     });
@@ -192,7 +186,6 @@ describe("plugin subpaths via startServer()", () => {
         ...defaultServerConfig({}),
         plugins: [eventLoggerPlugin({ prefix: "[evt-subpath]" })],
         port: 0,
-        websocket: false,
       },
     });
     await fetch(`${server.address}/v1/orgs`, {
@@ -211,7 +204,6 @@ describe("plugin subpaths via startServer()", () => {
         ...defaultServerConfig({}),
         plugins: [websocketPlugin()],
         port: 0,
-        websocket: false, // flag is off — plugin handles it
       },
     });
 
@@ -257,7 +249,6 @@ describe("plugin subpaths via startServer()", () => {
         ...defaultServerConfig({}),
         plugins: [websocketPlugin()],
         port: 0,
-        websocket: false,
       },
     });
     // Should not throw
@@ -276,12 +267,10 @@ describe("plugin subpaths via startServer()", () => {
           requestLoggingPlugin({ prefix: "[combo]" }),
           healthMetaPlugin({ version: "combo-test" }),
           eventLoggerPlugin({ prefix: "[combo-evt]" }),
-          inMemoryKnowledgePlugin(),
           webhookPlugin(),
           websocketPlugin(),
         ],
         port: 0,
-        websocket: false,
       },
     });
 
@@ -304,7 +293,7 @@ describe("plugin subpaths via startServer()", () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe("string-based plugin names still work (backward compat)", () => {
+describe("string-based plugin names", () => {
   let server: RunningServer | undefined;
   afterEach(async () => {
     await server?.close();
@@ -319,7 +308,6 @@ describe("string-based plugin names still work (backward compat)", () => {
         ...defaultServerConfig({}),
         plugins: ["websocket"],
         port: 0,
-        websocket: false,
       },
     });
 
@@ -358,7 +346,6 @@ describe("string-based plugin names still work (backward compat)", () => {
         ...defaultServerConfig({}),
         plugins: [{ name: "api-key-header-auth", options: { envKey: "BC_API_KEY" } }],
         port: 0,
-        websocket: false,
       },
       env: { BC_API_KEY: "bc-secret" },
     });

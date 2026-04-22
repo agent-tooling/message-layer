@@ -22,6 +22,3 @@ export function requestLoggingPlugin(options: RequestLoggingOptions = {}): Serve
   };
 }
 
-/** @deprecated Pass typed options directly: `requestLoggingPlugin({ prefix: "..." })` */
-export const requestLoggingPluginFactory = (options?: Record<string, unknown>): ServerPlugin =>
-  requestLoggingPlugin({ prefix: typeof options?.prefix === "string" ? options.prefix : undefined });

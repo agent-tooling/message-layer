@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket as NodeWebSocket } from "ws";
 import { startServer, type RunningServer } from "../../src/server-runtime.js";
 import { defaultServerConfig } from "../../src/config.js";
+import { websocketPlugin } from "../../src/plugins/websocket.js";
 
 // End-to-end smoke tests that exercise every client-facing surface the
 // terminal and Next.js clients rely on, against a real HTTP + WS server
@@ -15,7 +16,7 @@ beforeAll(async () => {
   server = await startServer({
     port: 0,
     logger: () => {},
-    config: { ...defaultServerConfig({}), plugins: [], port: 0, websocket: true },
+    config: { ...defaultServerConfig({}), plugins: [websocketPlugin()], port: 0 },
   });
   baseUrl = server.address;
 });

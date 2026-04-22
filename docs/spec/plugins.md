@@ -9,9 +9,7 @@ artifacts, cursors, clients, and audit. Everything else is a plugin.
 
 ## Configuration
 
-### Typed subpath imports (recommended)
-
-Each plugin is a standalone subpath export with a typed factory function:
+Plugins are passed to `startServer` as an array. Each plugin is a standalone subpath import:
 
 ```typescript
 import { startServer } from "message-layer";
@@ -23,7 +21,6 @@ import { webhookPlugin }        from "message-layer/plugins/webhooks";
 import { websocketPlugin }      from "message-layer/plugins/websocket";
 import { scopedKnowledgePlugin }from "message-layer/plugins/scoped-knowledge";
 import { durableStreamsPlugin }  from "message-layer/plugins/durable-streams";
-import { inMemoryKnowledgePlugin } from "message-layer/plugins/in-memory-knowledge";
 
 await startServer({
   plugins: [
@@ -35,16 +32,13 @@ await startServer({
 });
 ```
 
-Plugins can be passed either as already-instantiated objects (as above) or as
-`{ name, options }` descriptors. Both forms can be mixed in the same array.
-
-### Via environment variable (for process-level config)
+Plugins can also be specified by string name via `PLUGINS` env var:
 
 ```bash
 PLUGINS=request-logging,websocket,webhooks node dist/server.js
 ```
 
-### Via `MESSAGE_LAYER_CONFIG` JSON
+Or as `{ name, options }` descriptors in `MESSAGE_LAYER_CONFIG`:
 
 ```bash
 MESSAGE_LAYER_CONFIG='{"plugins":[{"name":"websocket"},{"name":"webhooks"}]}' \
@@ -248,8 +242,6 @@ See [http-api.md](./http-api.md) for full request/response shapes.
 ### `websocket`
 
 Attaches a WebSocket server to the HTTP server after it is bound to a port.
-This is the recommended way to enable WebSocket: using the plugin makes WS
-an explicit, opt-in dependency instead of a hidden flag.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -260,15 +252,10 @@ import { websocketPlugin } from "message-layer/plugins/websocket";
 
 await startServer({
   plugins: [websocketPlugin()],
-  config: { websocket: false }, // disable the legacy flag; plugin takes over
 });
 ```
 
-**Backward compat:** the `ENABLE_WEBSOCKET=true` environment variable and the
-`websocket: true` config flag still work when no `websocket` plugin is present.
-When the plugin IS present, the config flag is ignored.
-
-**String name (env-var config):** `"websocket"` (e.g. `PLUGINS=websocket`).
+Via env: `PLUGINS=websocket`.
 
 ---
 
@@ -291,17 +278,6 @@ before the final message is committed to a channel.
 | `POST` | `/v1/durable-streams/:id/commit` | Concat all chunks and write a message to the target channel/thread. |
 
 See [http-api.md](./http-api.md) for full request/response shapes.
-
----
-
-### `in-memory-knowledge` _(legacy)_
-
-A lightweight in-memory index of message IDs per stream, built from
-`message.appended` events. Retained for plugin-authoring tests and backward
-compatibility. Use `scoped-knowledge` for production — it persists across
-restarts, enforces privacy, and supports promotion.
-
----
 
 ---
 

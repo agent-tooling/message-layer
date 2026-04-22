@@ -379,3 +379,7 @@ Before editing code, read `CONTRIBUTING.md` for the project layout and the
   one WS message, and corresponding unit + e2e tests.
 - Plugins never mutate core state; they subscribe to the bus and/or mount
   additional HTTP routes.
+
+## Change Workflow
+
+If we're changing the implementation or reverting something, remove all the old code including docs and tests. Never mark a feature as "legacy" and try to keep it around to be backwards compatible.

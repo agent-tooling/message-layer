@@ -38,10 +38,6 @@
       "import": "./dist/plugins/health-meta.js",
       "types": "./dist/plugins/health-meta.d.ts"
     },
-    "./plugins/in-memory-knowledge": {
-      "import": "./dist/plugins/in-memory-knowledge.js",
-      "types": "./dist/plugins/in-memory-knowledge.d.ts"
-    },
     "./plugins/request-logging": {
       "import": "./dist/plugins/request-logging.js",
       "types": "./dist/plugins/request-logging.d.ts"

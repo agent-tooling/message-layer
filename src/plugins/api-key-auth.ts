@@ -62,13 +62,3 @@ export function apiKeyAuthPlugin(options: ApiKeyAuthOptions = {}): ServerPlugin 
   };
 }
 
-/** @deprecated Pass typed options directly: `apiKeyAuthPlugin({ strict: true })` */
-export const apiKeyAuthPluginFactory = (options?: Record<string, unknown>): ServerPlugin =>
-  apiKeyAuthPlugin({
-    headerName: typeof options?.headerName === "string" ? options.headerName : undefined,
-    envKey: typeof options?.envKey === "string" ? options.envKey : undefined,
-    protectedPrefixes: Array.isArray(options?.protectedPrefixes)
-      ? (options.protectedPrefixes as string[])
-      : undefined,
-    strict: options?.strict === true,
-  });

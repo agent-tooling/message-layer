@@ -15,7 +15,7 @@ beforeAll(async () => {
   server = await startServer({
     port: 0,
     logger: () => {},
-    config: { ...defaultServerConfig(process.env), plugins: [], port: 0, websocket: false },
+    config: { ...defaultServerConfig(process.env), plugins: [], port: 0 },
   });
   process.env.MESSAGE_LAYER_BASE_URL = server.address;
   process.env.DEFAULT_ORG_NAME = `nextjs-smoke-${Date.now()}`;

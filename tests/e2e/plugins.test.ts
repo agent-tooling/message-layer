@@ -37,7 +37,7 @@ async function makeHarness(plugins: PluginConfigEntry[], env: NodeJS.ProcessEnv 
       bus,
       logger: () => {},
       env,
-      config: { port: 0, storage: { adapter: "pglite", path: "memory://plug" }, plugins, websocket: false },
+      config: { port: 0, storage: { adapter: "pglite", path: "memory://plug" }, plugins },
     },
     instantiated,
   );
@@ -87,7 +87,7 @@ describe("built-in plugins", () => {
         bus,
         env: {},
         logger: (m) => logs.push(m),
-        config: { port: 0, storage: { adapter: "pglite", path: "x" }, plugins: [], websocket: false },
+        config: { port: 0, storage: { adapter: "pglite", path: "x" }, plugins: [] },
       },
       resolvePlugins([{ name: "request-logging", options: { prefix: "TST" } }]),
     );
@@ -148,7 +148,7 @@ describe("built-in plugins", () => {
         bus,
         env: {},
         logger: (m) => logs.push(m),
-        config: { port: 0, storage: { adapter: "pglite", path: "x" }, plugins: [], websocket: false },
+        config: { port: 0, storage: { adapter: "pglite", path: "x" }, plugins: [] },
       },
       resolvePlugins(["event-logger"]),
     );
@@ -158,30 +158,6 @@ describe("built-in plugins", () => {
     await db.close?.();
     expect(logs.some((l) => l.includes("org.created"))).toBe(true);
     expect(logs.some((l) => l.includes("membership.updated"))).toBe(true);
-  });
-
-  test("in-memory-knowledge plugin builds a per-stream index from events and exposes a route", async () => {
-    harness = await makeHarness(["in-memory-knowledge"]);
-    const orgId = await harness.service.createOrg("KB");
-    const adminId = await harness.service.createActor(orgId, "human", "admin");
-    const admin: Principal = {
-      actorId: adminId,
-      orgId,
-      scopes: ["channel:create", "message:append"],
-      provider: "test",
-    };
-    const channelId = await harness.service.createChannel(admin, "general", "public");
-    const append = await harness.service.appendMessage(admin, {
-      streamId: channelId,
-      streamType: "channel",
-      parts: [{ type: "text", payload: { text: "indexed" } }],
-      idempotencyKey: "a",
-    });
-    if ("denied" in append && append.denied) throw new Error("unexpected denial");
-    const res = await harness.app.fetch(new Request(`http://localhost/plugins/knowledge/${channelId}`));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { streamId: string; messageIds: string[] };
-    expect(body.messageIds).toContain(append.messageId);
   });
 
   test("webhooks plugin stores subscriptions and delivers matching events", async () => {
@@ -273,7 +249,7 @@ describe("plugins via real running server", () => {
     server = await startServer({
       port: 0,
       logger: () => {},
-      config: { ...defaultServerConfig({}), plugins: ["health-meta"], port: 0, websocket: false },
+      config: { ...defaultServerConfig({}), plugins: ["health-meta"], port: 0 },
     });
     const res = await fetch(`${server.address}/health/meta`);
     expect(res.status).toBe(200);

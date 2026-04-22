@@ -26,7 +26,6 @@ describe("SDK apiKey / api-key-header-auth plugin", () => {
           },
         ],
         port: 0,
-        websocket: false,
       },
       env: { ML_TEST_API_KEY: SECRET },
     });
@@ -172,7 +171,6 @@ describe("SDK apiKey / api-key-header-auth plugin", () => {
           },
         ],
         port: 0,
-        websocket: false,
       },
       env: { ML_CUSTOM_KEY: "custom-secret" },
     });

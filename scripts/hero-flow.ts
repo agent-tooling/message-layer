@@ -58,7 +58,6 @@ async function main(): Promise<void> {
       config: {
         ...defaultServerConfig({}),
         port: 0,
-        websocket: false,
         storage: {
           adapter: "pglite",
           path: `memory://hero-demo-${Math.random().toString(16).slice(2)}`,

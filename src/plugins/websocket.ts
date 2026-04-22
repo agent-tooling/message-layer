@@ -68,6 +68,3 @@ export function websocketPlugin(options: WebSocketPluginOptions = {}): ServerPlu
   };
 }
 
-/** @deprecated Pass typed options directly: `websocketPlugin()` */
-export const websocketPluginFactory = (options?: Record<string, unknown>): ServerPlugin =>
-  websocketPlugin({ path: typeof options?.path === "string" ? options.path : undefined });

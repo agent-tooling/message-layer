@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { WebSocket as NodeWebSocket } from "ws";
 import { startServer, type RunningServer } from "../../src/server-runtime.js";
 import { defaultServerConfig } from "../../src/config.js";
+import { websocketPlugin } from "../../src/plugins/websocket.js";
 import type { Principal } from "../../src/types.js";
 
 let server: RunningServer;
@@ -10,7 +11,7 @@ beforeEach(async () => {
   server = await startServer({
     port: 0,
     logger: () => {},
-    config: { ...defaultServerConfig({}), plugins: [], websocket: true, port: 0 },
+    config: { ...defaultServerConfig({}), plugins: [websocketPlugin()], port: 0 },
   });
 });
 afterEach(async () => {

@@ -23,6 +23,3 @@ export function eventLoggerPlugin(options: EventLoggerOptions = {}): ServerPlugi
   };
 }
 
-/** @deprecated Pass typed options directly: `eventLoggerPlugin({ prefix: "..." })` */
-export const eventLoggerPluginFactory = (options?: Record<string, unknown>): ServerPlugin =>
-  eventLoggerPlugin({ prefix: typeof options?.prefix === "string" ? options.prefix : undefined });

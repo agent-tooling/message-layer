@@ -38,7 +38,6 @@ beforeEach(async () => {
     config: {
       ...defaultServerConfig({}),
       port: 0,
-      websocket: false,
       storage: { adapter: "pglite", path: `memory://hero-${Math.random().toString(16).slice(2)}` },
       artifacts: { kind: "memory", maxBytes: 5 * 1024 * 1024 },
       plugins: ["scoped-knowledge"],

@@ -13,7 +13,6 @@ import {
 } from "./plugins.js";
 import { MessageLayer, type MessageLayerService } from "./service.js";
 import { createStorageAdapter, type StorageAdapter, type StorageConfig } from "./storage.js";
-import { attachWebSocketServer, type WebSocketServerHandle } from "./ws.js";
 
 export interface StartServerOptions {
   config?: ServerConfig;
@@ -34,7 +33,6 @@ export interface RunningServer {
   port: number;
   address: string;
   httpServer: HttpServer;
-  ws: WebSocketServerHandle | null;
   disposePlugins: () => Promise<void>;
   close: () => Promise<void>;
 }
@@ -89,14 +87,6 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
   // uses this hook to call attachWebSocketServer.
   await notifyPluginsServerBound(plugins, httpServer);
 
-  // Backward compat: if websocket: true in config AND no websocket plugin is
-  // present, attach the WebSocket server directly.
-  const hasWebSocketPlugin = plugins.some((p) => p.name === "websocket");
-  let ws: WebSocketServerHandle | null = null;
-  if (config.websocket && !hasWebSocketPlugin) {
-    ws = attachWebSocketServer(httpServer, service, bus);
-  }
-
   const address = httpServer.address();
   const resolvedPort = typeof address === "object" && address ? address.port : port;
 
@@ -108,10 +98,8 @@ export async function startServer(options: StartServerOptions = {}): Promise<Run
     port: resolvedPort,
     address: `http://127.0.0.1:${resolvedPort}`,
     httpServer,
-    ws,
     disposePlugins,
     close: async () => {
-      await ws?.close();
       await disposePlugins();
       await new Promise<void>((resolve, reject) => {
         httpServer.close((err) => (err ? reject(err) : resolve()));

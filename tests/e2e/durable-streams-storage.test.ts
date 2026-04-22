@@ -341,7 +341,6 @@ describe("durable-streams-storage plugin", () => {
       storage: new InMemoryStorageAdapter(),
       config: {
         port: 0,
-        websocket: false,
         storage: { adapter: "pglite", path: `memory://dss-mem-${Math.random().toString(16).slice(2)}` },
         artifacts: { kind: "memory" },
         plugins: ["durable-streams-storage"],
@@ -369,7 +368,6 @@ describe("durable-streams-storage plugin (S3 backend via FakeS3Server)", () => {
       logger: () => {},
       config: {
         port: 0,
-        websocket: false,
         storage: { adapter: "pglite", path: `memory://dss-s3-${Math.random().toString(16).slice(2)}` },
         artifacts: {
           kind: "s3",

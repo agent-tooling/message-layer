@@ -1,13 +1,15 @@
-import { Agent } from "@mastra/core/agent";
 import WebSocket from "ws";
 import { bootstrapAgent } from "./bootstrap.js";
+import { CursorApiClient, type AgentStatus } from "./cursor-api.js";
 import { MessageLayerClient, type MlMessage, type Principal } from "./ml.js";
 
 const args = parseArgs(process.argv.slice(2));
 const BASE_URL = args.baseUrl ?? process.env.MESSAGE_LAYER_BASE_URL ?? "http://127.0.0.1:3000";
 const HEALTH_URL = args.healthUrl ?? process.env.NEXTJS_HEALTH_URL ?? "http://localhost:3001";
 const ORG_ID = args.orgId ?? process.env.MESSAGE_LAYER_ORG_ID ?? "";
-const MODEL = args.model ?? process.env.CURSOR_MODEL ?? "openai/gpt-4o-mini";
+const CURSOR_API_KEY = process.env.CURSOR_API_KEY ?? "";
+const DEFAULT_REPOSITORY = process.env.CURSOR_DEFAULT_REPOSITORY ?? "";
+const DEFAULT_REF = process.env.CURSOR_DEFAULT_REF ?? "main";
 const ONCE = args.once;
 
 type CursorInvocation = {
@@ -15,6 +17,8 @@ type CursorInvocation = {
   streamType: "thread" | "channel";
   prompt: string;
   requesterActorId: string | null;
+  repository: string | null;
+  ref: string | null;
 };
 
 async function isNextjsUp(): Promise<boolean> {
@@ -28,7 +32,9 @@ async function isNextjsUp(): Promise<boolean> {
 
 function toWsUrl(baseUrl: string): string {
   const url = new URL("/v1/ws", baseUrl);
-  return url.protocol === "https:" ? url.toString().replace(/^https:/, "wss:") : url.toString().replace(/^http:/, "ws:");
+  return url.protocol === "https:"
+    ? url.toString().replace(/^https:/, "wss:")
+    : url.toString().replace(/^http:/, "ws:");
 }
 
 function extractInvocation(msg: MlMessage): CursorInvocation | null {
@@ -44,8 +50,16 @@ function extractInvocation(msg: MlMessage): CursorInvocation | null {
       typeof argsRecord.requesterActorId === "string" && argsRecord.requesterActorId.length > 0
         ? argsRecord.requesterActorId
         : null;
+    const repository =
+      typeof argsRecord.repository === "string" && argsRecord.repository.length > 0
+        ? argsRecord.repository
+        : null;
+    const ref =
+      typeof argsRecord.ref === "string" && argsRecord.ref.length > 0
+        ? argsRecord.ref
+        : null;
     if (!runId || !prompt) continue;
-    return { runId, streamType, prompt, requesterActorId };
+    return { runId, streamType, prompt, requesterActorId, repository, ref };
   }
   return null;
 }
@@ -70,21 +84,51 @@ function parseFrame(raw: WebSocket.RawData): {
   }
 }
 
+function statusEmoji(status: AgentStatus): string {
+  switch (status) {
+    case "FINISHED": return "✅";
+    case "FAILED":   return "❌";
+    case "STOPPED":  return "⏹";
+    default:         return "⏳";
+  }
+}
+
 async function handleInvocation(
-  agent: Agent,
+  cursorApi: CursorApiClient,
   client: MessageLayerClient,
   selfActorId: string,
   streamId: string,
   invocation: CursorInvocation,
 ): Promise<void> {
-  const start = await client.appendParts({
+  const repository = invocation.repository ?? DEFAULT_REPOSITORY;
+  const ref = invocation.ref ?? DEFAULT_REF;
+
+  if (!repository) {
+    await client.appendParts({
+      streamId,
+      streamType: invocation.streamType,
+      parts: [
+        {
+          type: "text",
+          payload: {
+            text: "Cannot launch Cursor agent: no repository provided. Set `CURSOR_DEFAULT_REPOSITORY` or pass `repository` in the invocation args.",
+            kind: "cursor_error",
+          },
+        },
+      ],
+    });
+    return;
+  }
+
+  // Post "launching" acknowledgement
+  const ack = await client.appendParts({
     streamId,
     streamType: invocation.streamType,
     parts: [
       {
         type: "text",
         payload: {
-          text: `Cursor run ${invocation.runId.slice(0, 8)} started.`,
+          text: `Launching Cursor cloud agent for run \`${invocation.runId.slice(0, 8)}\`…`,
           kind: "cursor_status",
         },
       },
@@ -92,63 +136,135 @@ async function handleInvocation(
         type: "tool_result",
         payload: {
           toolName: "cursor.invoke",
-          content: JSON.stringify(
-            {
-              runId: invocation.runId,
-              status: "started",
-              streamType: invocation.streamType,
-            },
-            null,
-            2,
-          ),
+          content: JSON.stringify({ runId: invocation.runId, status: "launching" }, null, 2),
         },
       },
     ],
   });
-  if (!start.ok) {
-    console.warn(`[cursor] failed to write run start for ${invocation.runId}: ${start.message}`);
+  if (!ack.ok) {
+    console.warn(`[cursor] failed to write ack for ${invocation.runId}: ${ack.message}`);
     return;
   }
 
-  const response = await agent.generate(
-    [
-      "You are Cursor, a concise coding assistant in message-layer.",
-      `User actor id: ${invocation.requesterActorId ?? "unknown"}`,
-      `Run id: ${invocation.runId}`,
-      `Respond to the user's request in 4-8 short sentences.`,
-      "Prefer concrete implementation guidance over generic advice.",
-      `User request:\n${invocation.prompt}`,
-    ].join("\n\n"),
-  );
-
-  const finalText = typeof response.text === "string" ? response.text.trim() : "";
-  const parts: Array<{
-    type: "text" | "tool_result";
-    payload: Record<string, unknown>;
-  }> = [];
-  if (finalText.length > 0) {
-    parts.push({ type: "text", payload: { text: finalText } });
-  }
-  parts.push({
-    type: "tool_result",
-    payload: {
-      toolName: "cursor.invoke",
-      content: JSON.stringify(
+  let agentId: string;
+  let agentUrl: string | undefined;
+  try {
+    const launched = await cursorApi.launchAgent({
+      prompt: { text: invocation.prompt },
+      source: { repository, ref },
+      target: { autoCreatePr: false },
+    });
+    agentId = launched.id;
+    agentUrl = launched.target?.url;
+    console.log(`[cursor] launched agent ${agentId} for run ${invocation.runId}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[cursor] failed to launch agent: ${msg}`);
+    await client.appendParts({
+      streamId,
+      streamType: invocation.streamType,
+      parts: [
         {
-          runId: invocation.runId,
-          status: "completed",
-          responderActorId: selfActorId,
+          type: "text",
+          payload: { text: `Failed to launch Cursor agent: ${msg}`, kind: "cursor_error" },
         },
-        null,
-        2,
-      ),
-    },
+        {
+          type: "tool_result",
+          payload: {
+            toolName: "cursor.invoke",
+            content: JSON.stringify({ runId: invocation.runId, status: "failed", error: msg }, null, 2),
+          },
+        },
+      ],
+    });
+    return;
+  }
+
+  // Post "agent started" with link
+  const startedLines = [`Cursor agent \`${agentId}\` is running.`];
+  if (agentUrl) startedLines.push(`[View agent](${agentUrl})`);
+  await client.appendParts({
+    streamId,
+    streamType: invocation.streamType,
+    parts: [
+      {
+        type: "text",
+        payload: { text: startedLines.join("\n"), kind: "cursor_status" },
+      },
+    ],
   });
+
+  // Poll until terminal state
+  let finalAgent: Awaited<ReturnType<CursorApiClient["waitForTerminal"]>>;
+  try {
+    finalAgent = await cursorApi.waitForTerminal(agentId, { pollMs: 5000 });
+    console.log(`[cursor] agent ${agentId} finished with status ${finalAgent.status}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[cursor] agent ${agentId} error during polling: ${msg}`);
+    await client.appendParts({
+      streamId,
+      streamType: invocation.streamType,
+      parts: [
+        {
+          type: "text",
+          payload: { text: `Cursor agent error: ${msg}`, kind: "cursor_error" },
+        },
+        {
+          type: "tool_result",
+          payload: {
+            toolName: "cursor.invoke",
+            content: JSON.stringify({ runId: invocation.runId, agentId, status: "error", error: msg }, null, 2),
+          },
+        },
+      ],
+    });
+    return;
+  }
+
+  const emoji = statusEmoji(finalAgent.status);
+  const resultLines: string[] = [
+    `${emoji} Cursor agent \`${agentId}\` ${finalAgent.status.toLowerCase()}.`,
+  ];
+  if (finalAgent.summary) {
+    resultLines.push("", finalAgent.summary);
+  }
+  if (finalAgent.target?.prUrl) {
+    resultLines.push("", `[View pull request](${finalAgent.target.prUrl})`);
+  } else if (agentUrl) {
+    resultLines.push("", `[View agent](${agentUrl})`);
+  }
+
+  const resultParts: Array<{ type: "text" | "tool_result"; payload: Record<string, unknown> }> = [
+    {
+      type: "text",
+      payload: { text: resultLines.join("\n") },
+    },
+    {
+      type: "tool_result",
+      payload: {
+        toolName: "cursor.invoke",
+        content: JSON.stringify(
+          {
+            runId: invocation.runId,
+            agentId,
+            status: finalAgent.status.toLowerCase(),
+            summary: finalAgent.summary ?? null,
+            prUrl: finalAgent.target?.prUrl ?? null,
+            agentUrl: agentUrl ?? null,
+            responderActorId: selfActorId,
+          },
+          null,
+          2,
+        ),
+      },
+    },
+  ];
 
   const posted = await client.appendParts({
     streamId,
     streamType: invocation.streamType,
-    parts,
+    parts: resultParts,
   });
   if (!posted.ok) {
     console.warn(`[cursor] failed to post completion for ${invocation.runId}: ${posted.message}`);
@@ -156,14 +272,24 @@ async function handleInvocation(
 }
 
 async function run(): Promise<void> {
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is required");
+  if (!CURSOR_API_KEY) {
+    throw new Error("CURSOR_API_KEY is required");
   }
   if (!ORG_ID) {
     throw new Error("MESSAGE_LAYER_ORG_ID (or --org-id) is required");
   }
   if (!(await isNextjsUp())) {
     throw new Error(`Next.js at ${HEALTH_URL} is not responding`);
+  }
+
+  const cursorApi = new CursorApiClient(CURSOR_API_KEY);
+
+  // Verify the API key works
+  try {
+    const me = await cursorApi.getMe();
+    console.log(`[cursor] authenticated as ${me.userEmail} (key: ${me.apiKeyName})`);
+  } catch (err) {
+    throw new Error(`Cursor API key check failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const { principal } = await bootstrapAgent({
@@ -175,13 +301,6 @@ async function run(): Promise<void> {
     statePrefix: "cursor",
   });
   const client = new MessageLayerClient(BASE_URL, principal);
-  const modelAgent = new Agent({
-    id: "cursor-agent",
-    name: "Cursor Agent",
-    model: MODEL,
-    instructions:
-      "You are Cursor. Be direct, implementation-oriented, and keep responses compact unless asked for deep detail.",
-  });
 
   const channels = await client.listChannels();
   if (channels.length === 0) {
@@ -252,7 +371,7 @@ async function run(): Promise<void> {
             : channelId;
         if (!targetStreamId) continue;
 
-        await handleInvocation(modelAgent, client, principal.actorId, targetStreamId, invocation);
+        await handleInvocation(cursorApi, client, principal.actorId, targetStreamId, invocation);
         handled += 1;
         if (ONCE && handled >= 1) {
           ws.close(1000, "once complete");
@@ -275,7 +394,6 @@ type ParsedArgs = {
   orgId?: string;
   baseUrl?: string;
   healthUrl?: string;
-  model?: string;
 };
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -295,7 +413,6 @@ function parseArgs(argv: string[]): ParsedArgs {
     else if (arg === "--org-id" || arg.startsWith("--org-id=")) out.orgId = readValue();
     else if (arg === "--base-url" || arg.startsWith("--base-url=")) out.baseUrl = readValue();
     else if (arg === "--health-url" || arg.startsWith("--health-url=")) out.healthUrl = readValue();
-    else if (arg === "--model" || arg.startsWith("--model=")) out.model = readValue();
   }
   return out;
 }

@@ -35,7 +35,6 @@ async function makeHarness(): Promise<PluginHarness> {
         storage: { adapter: "pglite", path: "memory://ds" },
         artifacts: { kind: "memory" },
         plugins: ["durable-streams"],
-        websocket: false,
       },
     },
     plugins,
@@ -180,7 +179,6 @@ describe("durable-streams plugin via real running server", () => {
       config: {
         ...defaultServerConfig({}),
         plugins: ["durable-streams"],
-        websocket: false,
         port: 0,
       },
     });

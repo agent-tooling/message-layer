@@ -35,7 +35,6 @@ async function makeHarness(): Promise<PluginHarness> {
         storage: { adapter: "pglite", path: "memory://sk" },
         artifacts: { kind: "memory" },
         plugins: ["scoped-knowledge"],
-        websocket: false,
       },
     },
     plugins,

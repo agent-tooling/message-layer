@@ -20,7 +20,6 @@ beforeAll(async () => {
     logger: () => {},
     config: {
       port: 0,
-      websocket: false,
       storage: {
         adapter: "pglite",
         path: `memory://genui-e2e-${Math.random().toString(16).slice(2)}`,
@@ -267,7 +266,6 @@ describe("HTTP / ui message parts", () => {
       logger: () => {},
       config: {
         port: 0,
-        websocket: false,
         storage: {
           adapter: "pglite",
           path: `memory://genui-sk-${Math.random().toString(16).slice(2)}`,

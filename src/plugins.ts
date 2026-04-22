@@ -3,15 +3,14 @@ import type { ServerConfig } from "./config.js";
 import type { SqlDatabase } from "./db.js";
 import type { EventBus } from "./event-bus.js";
 import type { MessageLayerService } from "./service.js";
-import { apiKeyAuthPluginFactory } from "./plugins/api-key-auth.js";
+import { apiKeyAuthPlugin } from "./plugins/api-key-auth.js";
 import { durableStreamsPlugin } from "./plugins/durable-streams.js";
-import { eventLoggerPluginFactory } from "./plugins/event-logger.js";
-import { healthMetaPluginFactory } from "./plugins/health-meta.js";
-import { inMemoryKnowledgePluginFactory } from "./plugins/in-memory-knowledge.js";
-import { requestLoggingPluginFactory } from "./plugins/request-logging.js";
+import { eventLoggerPlugin } from "./plugins/event-logger.js";
+import { healthMetaPlugin } from "./plugins/health-meta.js";
+import { requestLoggingPlugin } from "./plugins/request-logging.js";
 import { scopedKnowledgePlugin } from "./plugins/scoped-knowledge.js";
 import { webhookPlugin } from "./plugins/webhooks.js";
-import { websocketPluginFactory } from "./plugins/websocket.js";
+import { websocketPlugin } from "./plugins/websocket.js";
 import { durableStreamsStoragePlugin } from "./plugins/durable-streams-storage.js";
 import type { DomainEvent } from "./types.js";
 
@@ -59,16 +58,15 @@ export type PluginFactory = (options?: Record<string, unknown>) => ServerPlugin;
 // ── built-in plugin registry ───────────────────────────────────────────────
 
 export const builtInPluginFactories: Record<string, PluginFactory> = {
-  "request-logging": requestLoggingPluginFactory,
-  "health-meta": healthMetaPluginFactory,
-  "api-key-header-auth": apiKeyAuthPluginFactory,
-  "event-logger": eventLoggerPluginFactory,
-  "in-memory-knowledge": inMemoryKnowledgePluginFactory,
+  "request-logging": requestLoggingPlugin,
+  "health-meta": healthMetaPlugin,
+  "api-key-header-auth": apiKeyAuthPlugin,
+  "event-logger": eventLoggerPlugin,
   "scoped-knowledge": scopedKnowledgePlugin,
   webhooks: webhookPlugin,
   "durable-streams": durableStreamsPlugin,
   "durable-streams-storage": durableStreamsStoragePlugin,
-  websocket: websocketPluginFactory,
+  websocket: websocketPlugin,
 };
 
 export type PluginSpec = string | { name: string; options?: Record<string, unknown> } | ServerPlugin;

@@ -21,8 +21,6 @@ export type ServerConfig = {
    */
   artifacts: StorageConfig;
   plugins: PluginConfigEntry[];
-  /** Enable WebSocket upgrade on the HTTP server. Defaults to `true`. */
-  websocket: boolean;
 };
 
 function parseStorageAdapter(value: string | undefined): SqlAdapter {
@@ -51,11 +49,6 @@ function parsePluginsFromEnv(value: string | undefined): PluginConfigEntry[] {
     .map((name) => name.trim())
     .filter((name) => name.length > 0)
     .map((name) => ({ name }));
-}
-
-function parseBool(value: string | undefined, fallback: boolean): boolean {
-  if (value === undefined) return fallback;
-  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
 function parseArtifactsStorageKind(value: string | undefined): StorageKind {
@@ -117,7 +110,6 @@ export function defaultServerConfig(
     },
     artifacts: defaultArtifactsConfig(env),
     plugins: parsePluginsFromEnv(env.PLUGINS),
-    websocket: parseBool(env.ENABLE_WEBSOCKET, true),
   };
 }
 
@@ -163,7 +155,6 @@ export function parseServerConfig(
     },
     artifacts,
     plugins: parsed.plugins ?? defaults.plugins,
-    websocket: parsed.websocket ?? defaults.websocket,
   };
 }
 

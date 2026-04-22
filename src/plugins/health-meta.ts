@@ -25,9 +25,3 @@ export function healthMetaPlugin(options: HealthMetaOptions = {}): ServerPlugin 
   };
 }
 
-/** @deprecated Pass typed options directly: `healthMetaPlugin({ version: "..." })` */
-export const healthMetaPluginFactory = (options?: Record<string, unknown>): ServerPlugin =>
-  healthMetaPlugin({
-    includeAdapter: options?.includeAdapter !== false,
-    version: typeof options?.version === "string" ? options.version : undefined,
-  });

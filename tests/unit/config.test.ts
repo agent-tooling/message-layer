@@ -2,14 +2,13 @@ import { describe, expect, test } from "vitest";
 import { defaultServerConfig, parseServerConfig } from "../../src/config.js";
 
 describe("config", () => {
-  test("defaults to pglite at port 3000 with websocket enabled", () => {
+  test("defaults to pglite at port 3000", () => {
     const cfg = defaultServerConfig({});
     expect(cfg).toMatchObject({
       port: 3000,
       storage: { adapter: "pglite", path: "memory://server" },
       artifacts: { kind: "local-fs", basePath: "./.data/artifacts" },
       plugins: [],
-      websocket: true,
     });
     expect(cfg.artifacts.maxBytes).toBeGreaterThan(0);
   });
@@ -80,11 +79,6 @@ describe("config", () => {
     expect(() => parseServerConfig({ STORAGE_ADAPTER: "postgres" })).toThrow(
       /postgres adapter requires storage.path to be a Postgres connection string/,
     );
-  });
-
-  test("ENABLE_WEBSOCKET=false turns off websocket", () => {
-    const cfg = parseServerConfig({ ENABLE_WEBSOCKET: "false" });
-    expect(cfg.websocket).toBe(false);
   });
 
   test("malformed MESSAGE_LAYER_CONFIG is a clear error", () => {

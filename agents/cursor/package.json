@@ -10,7 +10,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@mastra/core": "1.24.1",
     "message-layer": "file:../../",
     "ws": "8.18.3"
   },
