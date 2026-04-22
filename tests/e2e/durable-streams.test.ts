@@ -162,6 +162,34 @@ describe("durable-streams plugin", () => {
     expect(messages.at(-1)?.parts[0]?.type).toBe("text");
     expect(messages.at(-1)?.parts[0]?.payload.text).toBe("Hello streaming world");
   });
+
+  test("durable_stream:read grant cannot bypass linked private stream membership", async () => {
+    const orgId = await h.service.createOrg("durable-privacy");
+    const ownerId = await h.service.createActor(orgId, "human", "owner");
+    const intruderId = await h.service.createActor(orgId, "human", "intruder");
+    const owner: Principal = {
+      actorId: ownerId,
+      orgId,
+      scopes: ["channel:create", "channel:admin", "message:append", "grant:create"],
+      provider: "test",
+    };
+    const intruder: Principal = {
+      actorId: intruderId,
+      orgId,
+      scopes: [],
+      provider: "test",
+    };
+    const privateChannel = await h.service.createChannel(owner, "private", "private");
+    const created = await http<{ durableStreamId: string }>(h.app, "POST", "/v1/durable-streams", owner, {
+      targetStreamId: privateChannel,
+      targetStreamType: "channel",
+    });
+    expect(created.status).toBe(200);
+
+    await h.service.createGrant(owner, intruderId, "org", orgId, "durable_stream:read");
+    const denied = await http(h.app, "GET", `/v1/durable-streams/${created.body.durableStreamId}/head`, intruder);
+    expect(denied.status).toBe(403);
+  });
 });
 
 describe("durable-streams plugin via real running server", () => {

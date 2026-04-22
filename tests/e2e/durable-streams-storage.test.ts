@@ -304,6 +304,46 @@ function defineTests(label: string, getServer: () => RunningServer) {
       expect(status).toBe(403);
     });
 
+    test("durable_stream:read grant cannot bypass linked private channel boundary", async () => {
+      const http = makeHttp(getServer());
+      const intruderRes = await http<{ actorId: string }>("POST", "/v1/actors", null, {
+        orgId: principal.orgId,
+        actorType: "human",
+        displayName: "granted-intruder",
+      });
+      const intruder: Principal = {
+        actorId: intruderRes.body.actorId,
+        orgId: principal.orgId,
+        scopes: [],
+        provider: "test",
+      };
+      const granter: Principal = {
+        ...principal,
+        scopes: [...new Set([...principal.scopes, "grant:create"])],
+      };
+
+      const { body: created } = await http<{ durableStreamId: string }>(
+        "POST",
+        "/v1/durable-streams-storage",
+        principal,
+        { targetStreamId: channelId, targetStreamType: "channel" },
+      );
+      const grant = await http<{ grantId: string }>("POST", "/v1/grants", granter, {
+        actorId: intruder.actorId,
+        resourceType: "org",
+        resourceId: principal.orgId,
+        capability: "durable_stream:read",
+      });
+      expect(grant.status).toBe(200);
+
+      const denied = await http(
+        "GET",
+        `/v1/durable-streams-storage/${created.durableStreamId}/head`,
+        intruder,
+      );
+      expect(denied.status).toBe(403);
+    });
+
     test("commit without target stream returns 400", async () => {
       const http = makeHttp(getServer());
       const { body: created } = await http<{ durableStreamId: string }>(

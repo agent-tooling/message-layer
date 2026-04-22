@@ -379,6 +379,204 @@ async function handleInvocation(
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isWebsocketUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Unexpected server response: 404") ||
+    message.includes("websocket error") ||
+    message.includes("ECONNREFUSED")
+  );
+}
+
+async function handleCursorEvent(input: {
+  cursorApi: CursorApiClient;
+  client: MessageLayerClient;
+  principal: Principal;
+  eventType: string;
+  payload: Record<string, unknown>;
+  streamId: string;
+  streamSeq: number;
+  remember: (messageId: string) => boolean;
+}): Promise<boolean> {
+  const { cursorApi, client, principal, eventType, payload, streamId, streamSeq, remember } =
+    input;
+  if (eventType === "command.invoked") {
+    const command =
+      typeof payload.command === "string" ? payload.command : "";
+    if (!isCursorCommand(command)) return false;
+    const ownerActorId =
+      typeof payload.ownerActorId === "string" ? payload.ownerActorId : null;
+    if (ownerActorId !== principal.actorId) return false;
+
+    const messageId =
+      typeof payload.messageId === "string" ? payload.messageId : "";
+    if (!messageId) return false;
+    if (!remember(messageId)) return false;
+
+    const partIndex =
+      typeof payload.partIndex === "number" ? payload.partIndex : -1;
+    const streamType =
+      payload.streamType === "thread" ? "thread" : "channel";
+    const sourceStreamId =
+      typeof payload.streamId === "string" ? payload.streamId : streamId;
+
+    const message = await loadMessageById(
+      client,
+      sourceStreamId,
+      messageId,
+      streamSeq,
+    );
+    if (!message) return false;
+    const { prompt, repository, ref } =
+      partIndex >= 0
+        ? extractPromptFromCommandPart(message, partIndex)
+        : { prompt: "", repository: null, ref: null };
+    if (!prompt) {
+      console.warn(
+        `[cursor] /${COMMAND_NAME} invoked without a prompt (messageId=${messageId.slice(0, 8)})`,
+      );
+      return false;
+    }
+
+    await handleInvocation(cursorApi, client, principal.actorId, {
+      runId: randomUUID().replace(/-/g, ""),
+      prompt,
+      repository,
+      ref,
+      streamId: sourceStreamId,
+      streamType,
+      channelId: streamType === "channel" ? sourceStreamId : streamId,
+      sourceMessageId: messageId,
+      trigger: "command",
+    });
+    return true;
+  }
+
+  if (eventType === "mention.recorded") {
+    const mentionedActorId =
+      typeof payload.mentionedActorId === "string"
+        ? payload.mentionedActorId
+        : null;
+    if (mentionedActorId !== principal.actorId) return false;
+    const messageId =
+      typeof payload.messageId === "string" ? payload.messageId : "";
+    if (!messageId) return false;
+    if (!remember(messageId)) return false;
+
+    const actorId =
+      typeof payload.actorId === "string" ? payload.actorId : "";
+    if (actorId === principal.actorId) return false;
+    const streamType =
+      payload.streamType === "thread" ? "thread" : "channel";
+    const sourceStreamId =
+      typeof payload.streamId === "string" ? payload.streamId : streamId;
+
+    const message = await loadMessageById(
+      client,
+      sourceStreamId,
+      messageId,
+      streamSeq,
+    );
+    if (!message) return false;
+    const prompt = extractPromptFromMention(message);
+    if (!prompt) {
+      console.warn(
+        `[cursor] @cursor mention had no prompt text (messageId=${messageId.slice(0, 8)})`,
+      );
+      return false;
+    }
+
+    await handleInvocation(cursorApi, client, principal.actorId, {
+      runId: randomUUID().replace(/-/g, ""),
+      prompt,
+      repository: null,
+      ref: null,
+      streamId: sourceStreamId,
+      streamType,
+      channelId: streamType === "channel" ? sourceStreamId : streamId,
+      sourceMessageId: messageId,
+      trigger: "mention",
+    });
+    return true;
+  }
+  return false;
+}
+
+async function pollLoop(input: {
+  cursorApi: CursorApiClient;
+  client: MessageLayerClient;
+  principal: Principal;
+  processed: Set<string>;
+  once: boolean;
+}): Promise<void> {
+  const streamLastSeq = new Map<string, number>();
+  let handled = 0;
+  const remember = (messageId: string): boolean => {
+    if (input.processed.has(messageId)) return false;
+    input.processed.add(messageId);
+    return true;
+  };
+
+  for (;;) {
+    const channels = await input.client.listChannels();
+    const streams: Array<{ streamId: string; streamType: "channel" | "thread" }> = [];
+    for (const channel of channels) {
+      streams.push({ streamId: channel.id, streamType: "channel" });
+      try {
+        const threads = await input.client.listThreads(channel.id);
+        for (const thread of threads) {
+          streams.push({ streamId: thread.id, streamType: "thread" });
+        }
+      } catch (error) {
+        console.warn(
+          `[cursor] polling could not list threads for channel ${channel.id.slice(0, 8)}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    for (const stream of streams) {
+      const fromSeq = streamLastSeq.get(stream.streamId) ?? 0;
+      const events = await input.client.listStreamEvents(stream.streamId, fromSeq);
+      let maxSeq = fromSeq;
+      for (const event of events) {
+        if (typeof event.streamSeq === "number") {
+          maxSeq = Math.max(maxSeq, event.streamSeq);
+        }
+        if (typeof event.streamSeq !== "number") continue;
+        try {
+          const didHandle = await handleCursorEvent({
+            cursorApi: input.cursorApi,
+            client: input.client,
+            principal: input.principal,
+            eventType: event.type,
+            payload: event.payload,
+            streamId: stream.streamId,
+            streamSeq: event.streamSeq,
+            remember,
+          });
+          if (didHandle) handled += 1;
+        } catch (error) {
+          console.error(
+            `[cursor] error handling ${event.type}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      streamLastSeq.set(stream.streamId, maxSeq);
+    }
+
+    if (input.once && handled >= 1) return;
+    await sleep(2200);
+  }
+}
+
 async function run(): Promise<void> {
   if (!CURSOR_API_KEY) {
     throw new Error("CURSOR_API_KEY is required");
@@ -476,7 +674,8 @@ async function run(): Promise<void> {
     return true;
   }
 
-  await new Promise<void>((resolve, reject) => {
+  try {
+    await new Promise<void>((resolve, reject) => {
     ws.on("open", () => {
       for (const channel of channels) {
         ws.send(
@@ -543,104 +742,17 @@ async function run(): Promise<void> {
       }
 
       try {
-        if (eventType === "command.invoked") {
-          const command =
-            typeof payload.command === "string" ? payload.command : "";
-          if (!isCursorCommand(command)) return;
-          const ownerActorId =
-            typeof payload.ownerActorId === "string" ? payload.ownerActorId : null;
-          // Only react to `/cursor` events that resolved to this actor.
-          if (ownerActorId !== principal.actorId) return;
-
-          const messageId =
-            typeof payload.messageId === "string" ? payload.messageId : "";
-          if (!messageId) return;
-          if (!remember(messageId)) return;
-
-          const partIndex =
-            typeof payload.partIndex === "number" ? payload.partIndex : -1;
-          const streamType =
-            payload.streamType === "thread" ? "thread" : "channel";
-          const sourceStreamId =
-            typeof payload.streamId === "string" ? payload.streamId : streamId;
-
-          const message = await loadMessageById(
-            client,
-            sourceStreamId,
-            messageId,
-            streamSeq,
-          );
-          if (!message) return;
-          const { prompt, repository, ref } =
-            partIndex >= 0
-              ? extractPromptFromCommandPart(message, partIndex)
-              : { prompt: "", repository: null, ref: null };
-          if (!prompt) {
-            console.warn(
-              `[cursor] /${COMMAND_NAME} invoked without a prompt (messageId=${messageId.slice(0, 8)})`,
-            );
-            return;
-          }
-
-          await handleInvocation(cursorApi, client, principal.actorId, {
-            runId: randomUUID().replace(/-/g, ""),
-            prompt,
-            repository,
-            ref,
-            streamId: sourceStreamId,
-            streamType,
-            channelId: streamType === "channel" ? sourceStreamId : streamId,
-            sourceMessageId: messageId,
-            trigger: "command",
-          });
-          handled += 1;
-        } else if (eventType === "mention.recorded") {
-          const mentionedActorId =
-            typeof payload.mentionedActorId === "string"
-              ? payload.mentionedActorId
-              : null;
-          if (mentionedActorId !== principal.actorId) return;
-          const messageId =
-            typeof payload.messageId === "string" ? payload.messageId : "";
-          if (!messageId) return;
-          if (!remember(messageId)) return;
-
-          const actorId =
-            typeof payload.actorId === "string" ? payload.actorId : "";
-          if (actorId === principal.actorId) return; // self-mention guard
-          const streamType =
-            payload.streamType === "thread" ? "thread" : "channel";
-          const sourceStreamId =
-            typeof payload.streamId === "string" ? payload.streamId : streamId;
-
-          const message = await loadMessageById(
-            client,
-            sourceStreamId,
-            messageId,
-            streamSeq,
-          );
-          if (!message) return;
-          const prompt = extractPromptFromMention(message);
-          if (!prompt) {
-            console.warn(
-              `[cursor] @cursor mention had no prompt text (messageId=${messageId.slice(0, 8)})`,
-            );
-            return;
-          }
-
-          await handleInvocation(cursorApi, client, principal.actorId, {
-            runId: randomUUID().replace(/-/g, ""),
-            prompt,
-            repository: null,
-            ref: null,
-            streamId: sourceStreamId,
-            streamType,
-            channelId: streamType === "channel" ? sourceStreamId : streamId,
-            sourceMessageId: messageId,
-            trigger: "mention",
-          });
-          handled += 1;
-        }
+        const didHandle = await handleCursorEvent({
+          cursorApi,
+          client,
+          principal,
+          eventType: eventType ?? "",
+          payload,
+          streamId,
+          streamSeq,
+          remember,
+        });
+        if (didHandle) handled += 1;
       } catch (error) {
         console.error(
           `[cursor] error handling ${eventType ?? "event"}: ${
@@ -659,7 +771,20 @@ async function run(): Promise<void> {
     ws.on("close", () => {
       if (!ONCE) resolve();
     });
-  });
+    });
+  } catch (error) {
+    if (!isWebsocketUnavailable(error)) throw error;
+    console.warn(
+      `[cursor] websocket unavailable (${error instanceof Error ? error.message : String(error)}); falling back to polling mode`,
+    );
+    await pollLoop({
+      cursorApi,
+      client,
+      principal,
+      processed,
+      once: ONCE,
+    });
+  }
 }
 
 type ParsedArgs = {

@@ -857,6 +857,105 @@ export class MessageLayer {
     return channelId;
   }
 
+  async deleteChannel(principal: Principal, channelId: string): Promise<void> {
+    await this.assertOrgActor(principal);
+    const channel = await this.loadChannel(channelId);
+    if (!channel) throw new NotFoundError(`channel not found: ${channelId}`);
+    if (channel.orgId !== principal.orgId) throw new PermissionError("channel not in principal org");
+    const allowed =
+      principal.scopes.includes("channel:admin") ||
+      channel.createdByActorId === principal.actorId ||
+      (await this.hasGrant(principal, "channel:admin", "channel", channelId));
+    if (!allowed) {
+      throw new PermissionError("missing channel:admin", {
+        capability: "channel:admin",
+        resourceType: "channel",
+        resourceId: channelId,
+      });
+    }
+
+    const events = await this.db.tx(async (tx) => {
+      const threadRows = await this.txQuery<{ id: string }>(
+        tx,
+        "SELECT id FROM threads WHERE org_id=? AND channel_id=?",
+        [principal.orgId, channelId],
+      );
+      const threadIds = threadRows.map((row) => row.id);
+      const streamIds = [channelId, ...threadIds];
+
+      if (streamIds.length > 0) {
+        const placeholders = streamIds.map(() => "?").join(",");
+        const streamArgs: unknown[] = [principal.orgId, ...streamIds];
+
+        await this.txQuery(
+          tx,
+          `DELETE FROM message_parts WHERE message_id IN (
+             SELECT id FROM messages WHERE org_id=? AND stream_id IN (${placeholders})
+           )`,
+          streamArgs,
+        );
+        await this.txQuery(
+          tx,
+          `DELETE FROM messages WHERE org_id=? AND stream_id IN (${placeholders})`,
+          streamArgs,
+        );
+        await this.txQuery(
+          tx,
+          `DELETE FROM events WHERE org_id=? AND stream_id IN (${placeholders})`,
+          streamArgs,
+        );
+        await this.txQuery(
+          tx,
+          `DELETE FROM stream_counters WHERE stream_id IN (${streamIds.map(() => "?").join(",")})`,
+          streamIds,
+        );
+        await this.txQuery(
+          tx,
+          `UPDATE artifacts
+             SET deleted=1, deleted_at=?, deleted_by_actor_id=?
+           WHERE org_id=? AND stream_id IN (${placeholders}) AND deleted=0`,
+          [this.ts(), principal.actorId, principal.orgId, ...streamIds],
+        );
+      }
+
+      await this.txQuery(
+        tx,
+        "DELETE FROM memberships WHERE org_id=? AND channel_id=?",
+        [principal.orgId, channelId],
+      );
+      await this.txQuery(
+        tx,
+        "UPDATE registered_commands SET status='disabled' WHERE org_id=? AND channel_id=?",
+        [principal.orgId, channelId],
+      );
+      await this.txQuery(
+        tx,
+        "DELETE FROM threads WHERE org_id=? AND channel_id=?",
+        [principal.orgId, channelId],
+      );
+      await this.txQuery(
+        tx,
+        "DELETE FROM channels WHERE org_id=? AND id=?",
+        [principal.orgId, channelId],
+      );
+
+      return [
+        await this.emit(tx, {
+          orgId: principal.orgId,
+          eventType: "audit.logged",
+          payload: {
+            kind: "channel.deleted",
+            orgId: principal.orgId,
+            channelId,
+            deletedByActorId: principal.actorId,
+            threadCount: threadIds.length,
+          },
+        }),
+      ];
+    });
+    for (const event of events) this.bus.publish(event);
+  }
+
   async addChannelMember(
     principal: Principal,
     channelId: string,

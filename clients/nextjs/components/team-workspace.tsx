@@ -177,6 +177,12 @@ export function TeamWorkspace() {
     () => members.filter((member) => member.actorType === "human"),
     [members],
   );
+  const currentUserRole = useMemo(() => {
+    const row = humanMembers.find((member) => member.actorId === currentActorId);
+    return row?.appRole ?? null;
+  }, [humanMembers, currentActorId]);
+  const canDeleteChannels =
+    currentUserRole === "owner" || currentUserRole === "admin";
   const mentionQuery = extractActiveMentionQuery(input);
   const commandQuery = extractActiveCommandQuery(input);
   const commandSuggestions = useMemo<CommandSuggestion[]>(
@@ -522,6 +528,27 @@ export function TeamWorkspace() {
     }
   }
 
+  async function deleteExistingChannel(channelId: string, channelName: string) {
+    if (!canDeleteChannels) return;
+    const confirmed = window.confirm(
+      `Delete #${channelName}? This also removes its threads and messages.`,
+    );
+    if (!confirmed) return;
+    try {
+      await api(`/api/team/channels/${channelId}`, {
+        method: "DELETE",
+      });
+      await refreshDirectory();
+      if (activeChannelId === channelId) {
+        const refreshed = await api<{ channels: Channel[] }>("/api/team/channels");
+        const nextChannelId = refreshed.channels[0]?.id ?? "";
+        setActiveChannelId(nextChannelId);
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   async function resolveApproval(
     requestId: string,
     approve: boolean,
@@ -592,6 +619,14 @@ export function TeamWorkspace() {
     setInput((current) => applyCommandSelection(current, name));
   }
 
+  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter") return;
+    if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (commandQuery === null || slashSuggestions.length === 0) return;
+    event.preventDefault();
+    selectCommand(slashSuggestions[0].name);
+  }
+
   function copyInviteLink() {
     if (!inviteLink) return;
     void navigator.clipboard?.writeText(inviteLink).catch(() => {});
@@ -619,18 +654,34 @@ export function TeamWorkspace() {
         </div>
         <div className="mt-3 space-y-1.5">
           {channels.map((channel) => (
-            <button
+            <div
               key={channel.id}
-              className={`block w-full rounded-lg border px-3 py-2 text-left text-sm transition ${
+              className={`flex items-center gap-2 rounded-lg border px-2 py-1.5 transition ${
                 channel.id === activeChannelId
-                  ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-200"
-                  : "border-zinc-800 bg-zinc-900/60 text-zinc-200 hover:border-zinc-700 hover:bg-zinc-900"
+                  ? "border-emerald-500/40 bg-emerald-500/15"
+                  : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-700 hover:bg-zinc-900"
               }`}
-              onClick={() => setActiveChannelId(channel.id)}
-              type="button"
             >
-              #{channel.name}
-            </button>
+              <button
+                className="min-w-0 flex-1 px-1 py-0.5 text-left text-sm text-zinc-200"
+                onClick={() => setActiveChannelId(channel.id)}
+                type="button"
+              >
+                #{channel.name}
+              </button>
+              {canDeleteChannels ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void deleteExistingChannel(channel.id, channel.name);
+                  }}
+                  className="rounded border border-zinc-700 px-2 py-1 text-[10px] uppercase tracking-wide text-zinc-400 transition hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-300"
+                >
+                  Delete
+                </button>
+              ) : null}
+            </div>
           ))}
         </div>
         <div className="mt-3 flex gap-2">
@@ -1031,6 +1082,7 @@ export function TeamWorkspace() {
                 className="h-28 w-full rounded-xl border border-zinc-700/80 bg-zinc-900/80 p-3 text-sm leading-relaxed outline-none transition focus:border-emerald-500/70"
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
+                onKeyDown={handleComposerKeyDown}
                 placeholder="Send a message... (@mention, /command)"
               />
               {mentionQuery !== null && mentionSuggestions.length > 0 ? (

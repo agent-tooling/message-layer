@@ -16,7 +16,8 @@
  * ```
  */
 
-import type { AuditRow, MessageRecord, Principal } from "../types.js";
+import { createHmac, timingSafeEqual } from "node:crypto";
+import type { AuditRow, DomainEvent, MessageRecord, Principal } from "../types.js";
 
 export type { AuditRow, MessageRecord, Principal };
 
@@ -77,6 +78,22 @@ export type PermissionRequest = {
   resourceId: string | null;
   context: Record<string, unknown>;
   createdAt: string;
+  status?: "open" | "approved" | "denied";
+  resolvedAt?: string | null;
+  grantId?: string | null;
+};
+
+export type PermissionRequestRecord = {
+  requestId: string;
+  actorId: string;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  status: "open" | "approved" | "denied";
+  context: Record<string, unknown>;
+  createdAt: string;
+  resolvedAt: string | null;
+  grantId: string | null;
 };
 
 export type RegisteredCommand = {
@@ -174,6 +191,40 @@ export type WebhookSubscription = {
   streamId: string | null;
   enabled: boolean;
   createdAt: string;
+};
+
+export type WebhookSubscriptionInput = {
+  endpoint: string;
+  eventTypes: string[];
+  streamId?: string | null;
+  secret?: string;
+};
+
+export type StreamEvent = {
+  id: string;
+  type: string;
+  streamSeq: number | null;
+  createdAt: string;
+  payload: Record<string, unknown>;
+};
+
+export type ResolvePermissionRequestResult = {
+  ok: true;
+  status: "open" | "approved" | "denied";
+  grantId: string | null;
+  commandId: string | null;
+};
+
+export type WaitForPermissionResolutionOptions = {
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  signal?: AbortSignal;
+};
+
+export type WebhookDeliveryEnvelope = {
+  deliveryId: string;
+  subscriptionId: string;
+  event: DomainEvent;
 };
 
 // ── Input types ───────────────────────────────────────────────────────────
@@ -407,6 +458,13 @@ export class MessageLayerClient {
     });
   }
 
+  /** Delete a channel. Requires channel admin privileges. */
+  async deleteChannel(channelId: string): Promise<void> {
+    await this.request(`/v1/channels/${channelId}`, {
+      method: "DELETE",
+    });
+  }
+
   /** Add a member to a channel. */
   async addChannelMember(
     channelId: string,
@@ -460,7 +518,15 @@ export class MessageLayerClient {
 
   /** Append a message to a channel or thread. */
   async appendMessage(input: AppendMessageInput): Promise<AppendMessageResult> {
-    return this.request("/v1/messages", {
+    const result = await this.request<{
+      ok?: boolean;
+      messageId?: string;
+      streamSeq?: number;
+      denied?: boolean;
+      requestId?: string;
+      permissionRequestId?: string;
+      capability?: string;
+    }>("/v1/messages", {
       method: "POST",
       body: {
         streamId: input.streamId,
@@ -470,6 +536,19 @@ export class MessageLayerClient {
         autoRequestOnDeny: input.autoRequestOnDeny,
       },
     });
+    if (result.denied === true) {
+      return {
+        ok: false,
+        denied: true,
+        permissionRequestId: result.requestId ?? result.permissionRequestId ?? "",
+        capability: result.capability ?? "message:append",
+      };
+    }
+    return {
+      ok: true,
+      messageId: result.messageId ?? "",
+      denied: false,
+    };
   }
 
   /** List messages in a stream (channel or thread). */
@@ -485,6 +564,18 @@ export class MessageLayerClient {
       `/v1/streams/${streamId}/messages${qs ? `?${qs}` : ""}`,
     );
     return result.messages;
+  }
+
+  /** Replay stream events after the given sequence number. */
+  async listStreamEvents(
+    streamId: string,
+    options?: { fromSeq?: number },
+  ): Promise<StreamEvent[]> {
+    const fromSeq = options?.fromSeq ?? 0;
+    const result = await this.request<{ events: StreamEvent[] }>(
+      `/v1/streams/${streamId}/subscribe?fromSeq=${fromSeq}`,
+    );
+    return result.events;
   }
 
   /** Redact a message. The slot is preserved; content is replaced with a tombstone. */
@@ -560,13 +651,27 @@ export class MessageLayerClient {
     return result.requests;
   }
 
+  /** Read one permission request by id (open or resolved). */
+  async getPermissionRequest(requestId: string): Promise<PermissionRequestRecord | null> {
+    try {
+      const result = await this.request<{ request: PermissionRequestRecord }>(
+        `/v1/permission-requests/${requestId}`,
+      );
+      return result.request;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("404")) return null;
+      throw error;
+    }
+  }
+
   /** Approve or deny a permission request. */
   async resolvePermissionRequest(
     requestId: string,
     approve: boolean,
     options?: ResolveOptions,
-  ): Promise<void> {
-    await this.request(`/v1/permission-requests/${requestId}/resolve`, {
+  ): Promise<ResolvePermissionRequestResult> {
+    return this.request(`/v1/permission-requests/${requestId}/resolve`, {
       method: "POST",
       body: {
         approve,
@@ -575,6 +680,31 @@ export class MessageLayerClient {
         maxUses: options?.maxUses ?? null,
       },
     });
+  }
+
+  /**
+   * Poll a permission request until it resolves, timeout expires, or the
+   * caller aborts. Returns `"open"` when still pending at timeout.
+   */
+  async waitForPermissionResolution(
+    requestId: string,
+    options?: WaitForPermissionResolutionOptions,
+  ): Promise<"open" | "approved" | "denied"> {
+    const timeoutMs = options?.timeoutMs ?? 300_000;
+    const pollIntervalMs = options?.pollIntervalMs ?? 2_000;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (options?.signal?.aborted) {
+        throw new Error("waitForPermissionResolution aborted");
+      }
+      const request = await this.getPermissionRequest(requestId);
+      if (!request) return "denied";
+      if (request.status === "approved" || request.status === "denied") {
+        return request.status;
+      }
+      if (Date.now() >= deadline) return "open";
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
   }
 
   // ── Command registry ──────────────────────────────────────────────────────
@@ -758,6 +888,27 @@ export class MessageLayerClient {
     return result.subscriptions;
   }
 
+  /** Create a webhook subscription. Requires `webhook:subscribe`. */
+  async createWebhookSubscription(input: WebhookSubscriptionInput): Promise<{ subscriptionId: string }> {
+    return this.request("/v1/webhooks/subscriptions", {
+      method: "POST",
+      body: {
+        endpoint: input.endpoint,
+        eventTypes: input.eventTypes,
+        streamId: input.streamId ?? null,
+        secret: input.secret,
+      },
+    });
+  }
+
+  /** Enable/disable an existing webhook subscription. */
+  async setWebhookSubscriptionEnabled(subscriptionId: string, enabled: boolean): Promise<void> {
+    await this.request(`/v1/webhooks/subscriptions/${subscriptionId}`, {
+      method: "PATCH",
+      body: { enabled },
+    });
+  }
+
   // ── WebSocket ──────────────────────────────────────────────────────────────
 
   /**
@@ -837,5 +988,42 @@ export class MessageLayerClient {
     return {
       close: () => ws.close(),
     };
+  }
+}
+
+/**
+ * Verify `x-message-layer-signature` (hex SHA-256 HMAC over the raw body).
+ * Returns false on malformed input; never throws.
+ */
+export function verifyWebhookSignature(input: {
+  rawBody: string;
+  signature: string | null | undefined;
+  secret: string;
+}): boolean {
+  if (!input.signature || input.secret.length === 0) return false;
+  const expected = createHmac("sha256", input.secret).update(input.rawBody).digest("hex");
+  const lhs = Buffer.from(input.signature, "hex");
+  const rhs = Buffer.from(expected, "hex");
+  if (lhs.length !== rhs.length) return false;
+  return timingSafeEqual(lhs, rhs);
+}
+
+/** Parse a webhook delivery body into a typed envelope, or `null` if invalid. */
+export function parseWebhookDeliveryEnvelope(rawBody: string): WebhookDeliveryEnvelope | null {
+  try {
+    const parsed = JSON.parse(rawBody) as Partial<WebhookDeliveryEnvelope>;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.deliveryId !== "string" ||
+      typeof parsed.subscriptionId !== "string" ||
+      !parsed.event ||
+      typeof parsed.event !== "object"
+    ) {
+      return null;
+    }
+    return parsed as WebhookDeliveryEnvelope;
+  } catch {
+    return null;
   }
 }

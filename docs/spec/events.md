@@ -62,6 +62,14 @@ Two transports expose the same event stream:
    replays events with `streamSeq > fromSeq` from the DB and then forwards
    live events from the in-process event bus as they are emitted.
 
+Important transport note:
+
+- Stream subscriptions (HTTP replay + WebSocket) are stream-scoped. Org-scope
+  events such as `permission_request.*`, `grant.*`, and `command.registered`
+  are not delivered on a stream subscription.
+- To react quickly to org-scope events, use the `webhooks` plugin or poll
+  request/grant APIs explicitly (for example `GET /v1/permission-requests/:id`).
+
 Both transports check privacy: subscribing to a private stream that the
 principal is not a member of yields a `403` (HTTP) or a `PERMISSION_DENIED`
 error frame (WebSocket).

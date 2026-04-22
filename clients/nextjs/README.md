@@ -21,6 +21,25 @@ pnpm install
 pnpm run dev
 ```
 
+For the full Next.js demo experience (all built-in plugins enabled), use:
+
+```bash
+pnpm run dev:plugins:nextjs-demo
+```
+
+This enables:
+
+- `request-logging`
+- `health-meta`
+- `api-key-header-auth`
+- `event-logger`
+- `memory`
+- `search`
+- `webhooks`
+- `durable-streams`
+- `durable-streams-storage`
+- `websocket`
+
 Then run the web client:
 
 ```bash
@@ -29,6 +48,15 @@ cp -n .env.local.example .env.local
 pnpm install
 pnpm run dev
 ```
+
+Or use:
+
+```bash
+pnpm run dev:demo
+```
+
+`dev:demo` keeps Next.js running and prints the expected root command for the
+plugin-enabled message-layer server.
 
 The app serves on `http://localhost:3001`.
 

@@ -87,13 +87,15 @@ export class MessageLayerClient {
     requestId: string,
     opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
   ): Promise<PermissionDecision> {
-    void requestId;
-    void opts;
-    // message-layer currently exposes list + resolve APIs for permission
-    // requests, but no stable read-by-id endpoint for agents. Returning "open"
-    // makes callers surface "pending approval" immediately instead of blocking
-    // on an endpoint that may not exist.
-    return "open";
+    const timeoutMs = opts.timeoutMs ?? Number(process.env.ASSISTANT_PERMISSION_TIMEOUT_MS ?? "300000");
+    const pollIntervalMs = opts.pollIntervalMs ?? Number(process.env.ASSISTANT_PERMISSION_POLL_MS ?? "2000");
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const status = await this.getPermissionRequestStatus(requestId);
+      if (status === "approved" || status === "denied") return status;
+      if (Date.now() >= deadline) return "open";
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
   }
 
   async createActor(orgId: string, actorType: "human" | "agent" | "app", displayName: string): Promise<string> {
@@ -331,6 +333,31 @@ export class MessageLayerClient {
     );
     if (status !== 200) throw new Error(`listMessages failed ${status}: ${JSON.stringify(body)}`);
     return (body as { messages: MlMessage[] }).messages;
+  }
+
+  async listStreamEvents(
+    streamId: string,
+    fromSeq = 0,
+  ): Promise<
+    Array<{
+      id: string;
+      type: string;
+      streamSeq: number | null;
+      createdAt: string;
+      payload: Record<string, unknown>;
+    }>
+  > {
+    const { status, body } = await this.call<{
+      events: Array<{
+        id: string;
+        type: string;
+        streamSeq: number | null;
+        createdAt: string;
+        payload: Record<string, unknown>;
+      }>;
+    }>("GET", `/v1/streams/${streamId}/subscribe?fromSeq=${fromSeq}`);
+    if (status !== 200) throw new Error(`listStreamEvents failed ${status}: ${JSON.stringify(body)}`);
+    return (body as { events: Array<any> }).events;
   }
 
   async openPermissionRequest(

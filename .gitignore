@@ -16,6 +16,7 @@ coverage
 
 # Local database / cache files.
 .pglite
+.data/
 agents/**/.data/
 clients/**/.data
 clients/**/.data.*

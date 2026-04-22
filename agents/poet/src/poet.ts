@@ -127,7 +127,7 @@ No intro sentence, no markdown fences.`,
     );
   }
 
-  const lastSeqByChannel = new Map<string, number>();
+  const lastSeqByStream = new Map<string, number>();
   const seenInvocationKeys = new Set<string>();
 
   let tick = 0;
@@ -167,63 +167,82 @@ No intro sentence, no markdown fences.`,
       }
 
       for (const channel of channels) {
-        const fromSeq = lastSeqByChannel.get(channel.id) ?? 0;
-        const events = await scopedClient.listStreamEvents(channel.id, fromSeq);
-        let maxSeq = fromSeq;
-        for (const event of events) {
-          if (typeof event.streamSeq === "number") {
-            maxSeq = Math.max(maxSeq, event.streamSeq);
-          }
-          if (event.type !== "command.invoked") continue;
-          const command = typeof event.payload.command === "string" ? event.payload.command : "";
-          if (!isPoemCommand(command)) continue;
-          const ownerActorId = typeof event.payload.ownerActorId === "string" ? event.payload.ownerActorId : null;
-          if (ownerActorId && ownerActorId !== principal.actorId) continue;
-          const messageId = typeof event.payload.messageId === "string" ? event.payload.messageId : "";
-          const partIndex = typeof event.payload.partIndex === "number" ? event.payload.partIndex : -1;
-          const streamType =
-            event.payload.streamType === "thread" ? "thread" : "channel";
-          const streamId = typeof event.payload.streamId === "string" ? event.payload.streamId : channel.id;
-          if (!messageId || partIndex < 0) continue;
-          const key = `${messageId}:${partIndex}`;
-          if (seenInvocationKeys.has(key)) continue;
-          seenInvocationKeys.add(key);
-
-          const prompt = await resolvePromptFromCommandPart({
-            client: scopedClient,
-            streamId,
-            messageId,
-            streamSeq:
-              typeof event.payload.streamSeq === "number"
-                ? event.payload.streamSeq
-                : event.streamSeq ?? 0,
-            partIndex,
-          });
-          const poemText = await generatePoemText(agent, prompt);
-          const replyResult = await postPoemReply({
-            client: scopedClient,
-            streamType,
-            channelId: channel.id,
-            parentMessageId: messageId,
-            targetThreadId: streamType === "thread" ? streamId : null,
-            text: poemText,
-          });
-          if (replyResult.ok) {
-            log(
-              "poem",
-              `${colors.green}replied to /${command} in ${streamType} ${streamId.slice(0, 8)} (message ${replyResult.messageId.slice(0, 8)})${colors.reset}`,
-            );
-          } else {
-            const reqHint = replyResult.requestId
-              ? ` request=${replyResult.requestId}`
-              : "";
-            log(
-              "poem",
-              `${colors.yellow}could not reply: ${replyResult.message}${reqHint}${colors.reset}`,
-            );
-          }
+        const streamIds = [channel.id];
+        try {
+          const threads = await scopedClient.listThreads(channel.id);
+          for (const thread of threads) streamIds.push(thread.id);
+        } catch (error) {
+          log(
+            "poem",
+            `${colors.yellow}could not list threads for #${channel.name}: ${error instanceof Error ? error.message : String(error)}${colors.reset}`,
+          );
         }
-        lastSeqByChannel.set(channel.id, maxSeq);
+        for (const streamId of streamIds) {
+          const fromSeq = lastSeqByStream.get(streamId) ?? 0;
+          const events = await scopedClient.listStreamEvents(streamId, fromSeq);
+          let maxSeq = fromSeq;
+          for (const event of events) {
+            if (typeof event.streamSeq === "number") {
+              maxSeq = Math.max(maxSeq, event.streamSeq);
+            }
+            if (event.type !== "command.invoked") continue;
+            const command = typeof event.payload.command === "string" ? event.payload.command : "";
+            if (!isPoemCommand(command)) continue;
+            const ownerActorId = typeof event.payload.ownerActorId === "string" ? event.payload.ownerActorId : null;
+            if (ownerActorId && ownerActorId !== principal.actorId) continue;
+            const messageId = typeof event.payload.messageId === "string" ? event.payload.messageId : "";
+            const partIndex = typeof event.payload.partIndex === "number" ? event.payload.partIndex : -1;
+            const streamType =
+              event.payload.streamType === "thread" ? "thread" : "channel";
+            const eventStreamId = typeof event.payload.streamId === "string" ? event.payload.streamId : streamId;
+            if (!messageId || partIndex < 0) continue;
+            const key = `${messageId}:${partIndex}`;
+            if (seenInvocationKeys.has(key)) continue;
+            seenInvocationKeys.add(key);
+
+            const prompt = await resolvePromptFromCommandPart({
+              client: scopedClient,
+              streamId: eventStreamId,
+              messageId,
+              streamSeq:
+                typeof event.payload.streamSeq === "number"
+                  ? event.payload.streamSeq
+                  : event.streamSeq ?? 0,
+              partIndex,
+            });
+            const poemText = await generatePoemText(agent, prompt);
+            const replyResult = await postPoemReply({
+              client: scopedClient,
+              streamType,
+              channelId: channel.id,
+              parentMessageId: messageId,
+              targetThreadId: streamType === "thread" ? eventStreamId : null,
+              text: poemText,
+            });
+            if (replyResult.ok) {
+              log(
+                "poem",
+                `${colors.green}replied to /${command} in ${streamType} ${eventStreamId.slice(0, 8)} (message ${replyResult.messageId.slice(0, 8)})${colors.reset}`,
+              );
+            } else {
+              const reqHint = replyResult.requestId
+                ? ` request=${replyResult.requestId}`
+                : "";
+              log(
+                "poem",
+                `${colors.yellow}could not reply: ${replyResult.message}${reqHint}${colors.reset}`,
+              );
+              if (
+                replyResult.requestId &&
+                replyResult.message.includes("still pending admin approval")
+              ) {
+                // Keep the invocation eligible for a later retry once approval lands.
+                seenInvocationKeys.delete(key);
+              }
+            }
+          }
+          lastSeqByStream.set(streamId, maxSeq);
+        }
       }
     } catch (error) {
       log("error", `${colors.red}${error instanceof Error ? error.message : String(error)}${colors.reset}`);

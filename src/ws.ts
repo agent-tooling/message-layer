@@ -180,13 +180,33 @@ async function handleConnection(
           if (e.streamSeq !== null) lastSeq = Math.max(lastSeq, e.streamSeq);
         }
 
+        let active = true;
         const unsubscribe = bus.subscribe((event: DomainEvent) => {
-          if (!isWebSocketEventDeliverable(event)) return;
-          if (event.streamId !== msg.streamId) return;
-          if (event.orgId !== principal.orgId) return;
-          if (event.streamSeq !== null && event.streamSeq <= lastSeq) return;
-          if (event.streamSeq !== null) lastSeq = event.streamSeq;
-          safeSend({ type: "event", event });
+          if (!active) return;
+          void (async () => {
+            if (!isWebSocketEventDeliverable(event)) return;
+            if (event.streamId !== msg.streamId) return;
+            if (event.orgId !== principal.orgId) return;
+            if (event.streamSeq !== null && event.streamSeq <= lastSeq) return;
+            try {
+              // Re-check readability on each event so membership revocations on
+              // private streams take effect immediately for live sockets.
+              await service.assertCanReadStream(principal, msg.streamId, resolvedStreamType);
+            } catch (error) {
+              active = false;
+              unsubscribe();
+              subscriptions.delete(msg.streamId);
+              if (error instanceof PermissionError) {
+                safeSend({ type: "error", error: error.message, code: "PERMISSION_DENIED", streamId: msg.streamId });
+              } else {
+                safeSend({ type: "error", error: "subscription revoked", code: "PERMISSION_DENIED", streamId: msg.streamId });
+              }
+              safeSend({ type: "unsubscribed", streamId: msg.streamId });
+              return;
+            }
+            if (event.streamSeq !== null) lastSeq = event.streamSeq;
+            safeSend({ type: "event", event });
+          })();
         });
         subscriptions.set(msg.streamId, { streamId: msg.streamId, streamType: resolvedStreamType, unsubscribe });
         safeSend({ type: "subscribed", streamId: msg.streamId, lastSeq });

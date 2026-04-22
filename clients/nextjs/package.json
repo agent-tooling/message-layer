@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "pnpm run auth:migrate && next dev --port 3001",
+    "dev:demo": "echo \"Run 'pnpm run dev:plugins:nextjs-demo' from the repository root in a separate terminal, then keep this Next.js dev server running.\" && pnpm run dev",
     "auth:migrate": "node scripts/ensure-auth-schema.mjs",
     "build": "next build",
     "start": "next start --port 3001",

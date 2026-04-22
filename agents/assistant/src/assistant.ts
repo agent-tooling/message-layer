@@ -226,7 +226,8 @@ async function run(): Promise<void> {
     instructions: `You are a workspace manager assistant.
 Use tools to inspect channels, create channels, and post messages.
 When a new user message appears in #general, reply briefly and helpfully.
-If a tool reports pending approval, explain that the request is awaiting admin decision.`,
+If a tool request needs approval, wait for the approval decision and continue automatically.
+Do not ask the user to re-send the same prompt or "check back later".`,
     tools,
   });
 
@@ -236,14 +237,74 @@ If a tool reports pending approval, explain that the request is awaiting admin d
   }
   await sendArrivalMessage(client, generalChannelId);
   console.log(`[assistant] subscribing to #general (${generalChannelId})`);
-  await subscribeLoop({
-    baseUrl: BASE_URL,
-    principal,
-    channelId: generalChannelId,
-    client,
-    mastraAgent,
-    once: ONCE,
-  });
+  try {
+    await subscribeLoop({
+      baseUrl: BASE_URL,
+      principal,
+      channelId: generalChannelId,
+      client,
+      mastraAgent,
+      once: ONCE,
+    });
+  } catch (error) {
+    if (!isWebsocketUnavailable(error)) throw error;
+    console.warn(
+      `[assistant] websocket unavailable (${error instanceof Error ? error.message : String(error)}); falling back to polling mode`,
+    );
+    await pollLoop({
+      channelId: generalChannelId,
+      client,
+      mastraAgent,
+      principalActorId: principal.actorId,
+      once: ONCE,
+    });
+  }
+}
+
+function isWebsocketUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Unexpected server response: 404") ||
+    message.includes("websocket subscription failed") ||
+    message.includes("ECONNREFUSED")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollLoop(input: {
+  channelId: string;
+  client: MessageLayerClient;
+  mastraAgent: Agent;
+  principalActorId: string;
+  once: boolean;
+}): Promise<void> {
+  const existing = await input.client.listMessages(input.channelId, 0);
+  let lastSeq = existing.reduce((max, message) => Math.max(max, message.streamSeq), 0);
+  let handled = 0;
+  for (;;) {
+    const events = await input.client.listStreamEvents(input.channelId, lastSeq);
+    for (const event of events) {
+      if (typeof event.streamSeq === "number") {
+        lastSeq = Math.max(lastSeq, event.streamSeq);
+      }
+      if (event.type !== "message.appended") continue;
+      const seq = typeof event.streamSeq === "number" ? event.streamSeq : null;
+      if (seq === null) continue;
+      await handleIncomingMessage(
+        input.mastraAgent,
+        input.client,
+        input.channelId,
+        input.principalActorId,
+        seq,
+      );
+      handled += 1;
+      if (input.once && handled >= 1) return;
+    }
+    await sleep(2200);
+  }
 }
 
 async function subscribeLoop(input: {

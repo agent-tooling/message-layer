@@ -146,6 +146,33 @@ describe("WebSocket transport", () => {
     handle.close();
   });
 
+  test("membership revocation stops live events on existing private subscription", async () => {
+    const { orgId, admin } = await bootstrap();
+    const priv = await server.service.createChannel(admin, "secret", "private");
+    const bobActorId = await server.service.createActor(orgId, "human", "bob");
+    await server.service.addChannelMember(admin, priv, bobActorId, "member");
+    const bob: Principal = { actorId: bobActorId, orgId, scopes: [], provider: "test" };
+
+    const handle = await openWs(`ws://127.0.0.1:${server.port}/v1/ws`, bob);
+    await handle.next((m) => m.type === "welcome");
+    handle.ws.send(JSON.stringify({ type: "subscribe", streamId: priv, streamType: "channel", fromSeq: 0 }));
+    await handle.next((m) => m.type === "subscribed");
+
+    await server.service.removeChannelMember(admin, priv, bobActorId);
+    await server.service.appendMessage(admin, {
+      streamId: priv,
+      streamType: "channel",
+      parts: [{ type: "text", payload: { text: "post-revocation" } }],
+      idempotencyKey: "revoked-live-1",
+    });
+
+    const err = await handle.next((m) => m.type === "error", 3000);
+    expect(err.code).toBe("PERMISSION_DENIED");
+    const unsub = await handle.next((m) => m.type === "unsubscribed", 3000);
+    expect(unsub.streamId).toBe(priv);
+    handle.close();
+  });
+
   test("ping → pong round trip", async () => {
     const { admin } = await bootstrap();
     const handle = await openWs(`ws://127.0.0.1:${server.port}/v1/ws`, admin);

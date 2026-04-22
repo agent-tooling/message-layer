@@ -76,6 +76,7 @@
   ],
   "scripts": {
     "dev": "tsx src/server.ts",
+    "dev:plugins:nextjs-demo": "PLUGINS=request-logging,health-meta,api-key-header-auth,event-logger,memory,search,webhooks,durable-streams,durable-streams-storage,websocket tsx src/server.ts",
     "start": "node --enable-source-maps dist/server.js",
     "build": "tsc -p tsconfig.build.json",
     "prepublishOnly": "pnpm run build",
@@ -85,6 +86,7 @@
     "client:terminal:demo": "tsx clients/terminal/client.ts --smoke",
     "demo:hero": "tsx scripts/hero-flow.ts",
     "client:nextjs": "pnpm --dir clients/nextjs run dev",
+    "client:nextjs:demo": "pnpm --dir clients/nextjs run dev:demo",
     "client:nextjs:build": "pnpm --dir clients/nextjs run build",
     "agent:poet": "pnpm --dir agents/poet run start",
     "agent:poet:once": "pnpm --dir agents/poet run once",

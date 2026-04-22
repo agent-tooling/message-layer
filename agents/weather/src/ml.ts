@@ -35,6 +35,8 @@ type MlPartType =
   | "ui";
 type MlPart = { type: MlPartType; payload: Record<string, unknown> };
 
+type PermissionDecision = "open" | "approved" | "denied";
+
 export type MlAppendResult =
   | { ok: true; messageId: string; streamSeq: number; idempotent: boolean }
   | {
@@ -81,6 +83,39 @@ export class MessageLayerClient {
       }
     }
     return { status: res.status, body: parsed as T };
+  }
+
+  private async getPermissionRequestStatus(requestId: string): Promise<PermissionDecision> {
+    try {
+      const { status, body } = await this.call<{ request?: { status?: PermissionDecision } }>(
+        "GET",
+        `/v1/permission-requests/${requestId}`,
+      );
+      if (status === 200) {
+        const requestStatus = (body as { request?: { status?: PermissionDecision } }).request?.status;
+        if (requestStatus === "open" || requestStatus === "approved" || requestStatus === "denied") {
+          return requestStatus;
+        }
+      }
+    } catch {
+      // best effort: treat as still pending
+    }
+    return "open";
+  }
+
+  private async waitForPermissionDecision(
+    requestId: string,
+    opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<PermissionDecision> {
+    const timeoutMs = opts.timeoutMs ?? Number(process.env.WEATHER_PERMISSION_TIMEOUT_MS ?? "300000");
+    const pollIntervalMs = opts.pollIntervalMs ?? Number(process.env.WEATHER_PERMISSION_POLL_MS ?? "2000");
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const status = await this.getPermissionRequestStatus(requestId);
+      if (status === "approved" || status === "denied") return status;
+      if (Date.now() >= deadline) return "open";
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
   }
 
   async listChannels(): Promise<MlChannel[]> {
@@ -163,10 +198,50 @@ export class MessageLayerClient {
     return (body as { events: Array<any> }).events;
   }
 
+  async listThreads(
+    channelId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      parentMessageId: string;
+      createdAt: string;
+      visibility: "private" | "public";
+    }>
+  > {
+    const { status, body } = await this.call<{
+      threads: Array<{
+        id: string;
+        parentMessageId: string;
+        createdAt: string;
+        visibility: "private" | "public";
+      }>;
+    }>("GET", `/v1/channels/${channelId}/threads`);
+    if (status !== 200) throw new Error(`listThreads failed ${status}: ${JSON.stringify(body)}`);
+    return (body as { threads: Array<any> }).threads;
+  }
+
   async createThread(
     channelId: string,
     parentMessageId: string,
     visibility: "public" | "private" = "public",
+  ): Promise<
+    | { ok: true; threadId: string }
+    | {
+        ok: false;
+        code: "permission_denied" | "validation" | "not_found" | "unknown";
+        message: string;
+        requestId?: string;
+        capability?: string;
+      }
+  > {
+    return this.createThreadInternal(channelId, parentMessageId, visibility, true);
+  }
+
+  private async createThreadInternal(
+    channelId: string,
+    parentMessageId: string,
+    visibility: "public" | "private",
+    waitOnDeny: boolean,
   ): Promise<
     | { ok: true; threadId: string }
     | {
@@ -201,12 +276,47 @@ export class MessageLayerClient {
       return { ok: true, threadId: payload.threadId };
     }
     if (status === 403) {
+      const capability = payload.capability ?? "thread:create";
+      const requestId = await this.openPermissionRequest(
+        capability,
+        "channel",
+        channelId,
+        {
+          kind: "thread.create",
+          tool: "weather_check_reply",
+          parentMessageId,
+          channelId,
+          requestedVisibility: visibility,
+        },
+      );
+      if (waitOnDeny && requestId) {
+        const decision = await this.waitForPermissionDecision(requestId);
+        if (decision === "approved") {
+          return this.createThreadInternal(channelId, parentMessageId, visibility, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            code: "permission_denied",
+            message: `request ${requestId} was denied by an admin`,
+            capability,
+            requestId,
+          };
+        }
+        return {
+          ok: false,
+          code: "permission_denied",
+          message: `request ${requestId} is still pending admin approval`,
+          capability,
+          requestId,
+        };
+      }
       return {
         ok: false,
         code: "permission_denied",
         message: payload.error ?? "permission denied",
-        capability: payload.capability ?? "thread:create",
-        requestId: payload.requestId,
+        capability,
+        requestId,
       };
     }
     if (status === 404) {
@@ -216,12 +326,46 @@ export class MessageLayerClient {
     return { ok: false, code: "unknown", message: payload.error ?? `create thread failed: HTTP ${status}` };
   }
 
+  async openPermissionRequest(
+    action: string,
+    resourceType: string,
+    resourceId: string | null,
+    context: Record<string, unknown> = {},
+  ): Promise<string | undefined> {
+    try {
+      const { status, body } = await this.call<{ requestId: string }>("POST", "/v1/permission-requests", {
+        action,
+        resourceType,
+        resourceId,
+        context,
+      });
+      if (status === 200 && typeof (body as { requestId?: string }).requestId === "string") {
+        return (body as { requestId: string }).requestId;
+      }
+    } catch {
+      // best effort — caller can proceed without requestId
+    }
+    return undefined;
+  }
+
   async appendParts(opts: {
     streamId: string;
     streamType: "channel" | "thread";
     parts: MlPart[];
     idempotencyKey?: string;
   }): Promise<MlAppendResult> {
+    return this.appendPartsInternal(opts, true);
+  }
+
+  private async appendPartsInternal(
+    opts: {
+      streamId: string;
+      streamType: "channel" | "thread";
+      parts: MlPart[];
+      idempotencyKey?: string;
+    },
+    waitOnDeny: boolean,
+  ): Promise<MlAppendResult> {
     const { status, body } = await this.call<{
       messageId?: string;
       streamSeq?: number;
@@ -249,6 +393,21 @@ export class MessageLayerClient {
       error?: string;
     };
     if (status === 200 && b.denied === true && b.requestId) {
+      if (waitOnDeny) {
+        const decision = await this.waitForPermissionDecision(b.requestId);
+        if (decision === "approved") {
+          return this.appendPartsInternal(opts, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            code: "permission_denied",
+            message: `request ${b.requestId} was denied by an admin`,
+            requestId: b.requestId,
+            capability: b.capability ?? "message:append",
+          };
+        }
+      }
       return {
         ok: false,
         code: "permission_denied",

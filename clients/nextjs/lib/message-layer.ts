@@ -93,9 +93,25 @@ type RoleGrantTemplate = {
 
 const bootstrapScopes = ["channel:create", "grant:create"];
 const orgPlaceholder = "$org";
+const fullAdminScopes = [
+  "audit:read",
+  "channel:create",
+  "channel:admin",
+  "thread:create",
+  "message:append",
+  "message:redact",
+  "grant:create",
+  "command:invoke",
+  "command:register",
+  "artifact:register",
+  "artifact:admin",
+  "memory:promote",
+  "webhook:subscribe",
+  "webhook:read",
+];
 const roleScopes: Record<UserRole, string[]> = {
-  owner: ["audit:read"],
-  admin: ["audit:read"],
+  owner: fullAdminScopes,
+  admin: fullAdminScopes,
   member: [],
 };
 
@@ -375,6 +391,9 @@ export async function checkActorCapability(
   actorId: string,
   capability: string,
 ): Promise<boolean> {
+  const userId = getUserIdByActorId(actorId);
+  const role = userId ? getUserRole(userId) : null;
+  if (role === "owner" || role === "admin") return true;
   return mlClient(principal).checkCapability(actorId, capability);
 }
 
@@ -496,6 +515,10 @@ export async function listCommands(
 export async function createChannel(principal: MlPrincipal, name: string): Promise<string> {
   const { channelId } = await mlClient(principal).createChannel(name, "public");
   return channelId;
+}
+
+export async function deleteChannel(principal: MlPrincipal, channelId: string): Promise<void> {
+  await mlClient(principal).deleteChannel(channelId);
 }
 
 export async function createPermissionRequest(

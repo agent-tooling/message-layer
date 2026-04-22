@@ -374,10 +374,32 @@ type PermissionRequest = {
   resourceId: string | null;
   context: Record<string, unknown>;
   createdAt: string;
+  status?: "open" | "approved" | "denied";
+  resolvedAt?: string | null;
+  grantId?: string | null;
 };
 ```
 
-#### `resolvePermissionRequest(requestId: string, approve: boolean, options?: ResolveOptions): Promise<void>`
+#### `getPermissionRequest(requestId: string): Promise<PermissionRequestRecord | null>`
+
+Read one permission request by id, including resolved state.
+
+```typescript
+type PermissionRequestRecord = {
+  requestId: string;
+  actorId: string;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  status: "open" | "approved" | "denied";
+  context: Record<string, unknown>;
+  createdAt: string;
+  resolvedAt: string | null;
+  grantId: string | null;
+};
+```
+
+#### `resolvePermissionRequest(requestId: string, approve: boolean, options?: ResolveOptions): Promise<ResolvePermissionRequestResult>`
 
 ```typescript
 type ResolveOptions = {
@@ -385,6 +407,25 @@ type ResolveOptions = {
   expiresAt?: string | null;  // ISO-8601 expiry for the issued grant
   maxUses?: number | null;    // usage cap for the issued grant
 };
+
+type ResolvePermissionRequestResult = {
+  ok: true;
+  status: "open" | "approved" | "denied";
+  grantId: string | null;
+  commandId: string | null;
+};
+```
+
+#### `waitForPermissionResolution(requestId: string, options?): Promise<"open" | "approved" | "denied">`
+
+Polls `getPermissionRequest()` until resolved, timeout, or abort:
+
+```typescript
+await client.waitForPermissionResolution(requestId, {
+  timeoutMs: 300_000,
+  pollIntervalMs: 2_000,
+  signal: abortController.signal,
+});
 ```
 
 ---
@@ -568,6 +609,49 @@ type WebhookSubscription = {
   streamId: string | null;
   enabled: boolean;
   createdAt: string;
+};
+```
+
+#### `createWebhookSubscription(input: WebhookSubscriptionInput): Promise<{ subscriptionId: string }>`
+
+```typescript
+type WebhookSubscriptionInput = {
+  endpoint: string;
+  eventTypes: string[];
+  streamId?: string | null;
+  secret?: string;
+};
+```
+
+#### `setWebhookSubscriptionEnabled(subscriptionId: string, enabled: boolean): Promise<void>`
+
+#### `verifyWebhookSignature({ rawBody, signature, secret }): boolean`
+
+Verifies the `x-message-layer-signature` header (hex SHA-256 HMAC over the raw request body).
+
+#### `parseWebhookDeliveryEnvelope(rawBody: string): WebhookDeliveryEnvelope | null`
+
+```typescript
+type WebhookDeliveryEnvelope = {
+  deliveryId: string;
+  subscriptionId: string;
+  event: DomainEvent;
+};
+```
+
+### Stream replay helper
+
+#### `listStreamEvents(streamId: string, options?: { fromSeq?: number }): Promise<StreamEvent[]>`
+
+HTTP replay equivalent of stream subscriptions:
+
+```typescript
+type StreamEvent = {
+  id: string;
+  type: string;
+  streamSeq: number | null;
+  createdAt: string;
+  payload: Record<string, unknown>;
 };
 ```
 

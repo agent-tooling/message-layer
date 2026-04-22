@@ -198,11 +198,13 @@ export function durableStreamsPlugin(options?: Record<string, unknown>): ServerP
       throw new PermissionError("durable stream not found");
     }
     if (streamVisibleToPrincipal(streamRow, principal)) return;
-    if (await hasCapability(principal, "durable_stream:read", serviceHasGrant)) return;
     if (streamRow.target_stream_id) {
+      // Linked streams inherit the target stream's privacy boundary. A broad
+      // durable_stream:read capability must never bypass private-stream access.
       await assertCanReadStream(principal, streamRow.target_stream_id);
       return;
     }
+    if (await hasCapability(principal, "durable_stream:read", serviceHasGrant)) return;
     throw new PermissionError("missing durable_stream:read");
   }
 

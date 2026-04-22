@@ -132,3 +132,42 @@ describe("service.createThread", () => {
     await expect(harness.service.createThread(admin, b, msg.messageId)).rejects.toBeInstanceOf(ValidationError);
   });
 });
+
+describe("service.deleteChannel", () => {
+  test("channel admin can delete a channel with its thread data", async () => {
+    const { admin } = await bootstrapOrg(harness.service);
+    const channelId = await harness.service.createChannel(admin, "cleanup-room", "private");
+    const root = await harness.service.appendMessage(admin, {
+      streamId: channelId,
+      streamType: "channel",
+      parts: [{ type: "text", payload: { text: "root" } }],
+      idempotencyKey: "delete-channel-root",
+    });
+    if ("denied" in root && root.denied) throw new Error("unexpected denial");
+    const threadId = await harness.service.createThread(admin, channelId, root.messageId, "private");
+    await harness.service.appendMessage(admin, {
+      streamId: threadId,
+      streamType: "thread",
+      parts: [{ type: "text", payload: { text: "thread-reply" } }],
+      idempotencyKey: "delete-channel-thread-reply",
+    });
+
+    await harness.service.deleteChannel(admin, channelId);
+
+    const channels = await harness.service.listChannels(admin);
+    expect(channels.map((channel) => channel.id)).not.toContain(channelId);
+    await expect(
+      harness.service.listMessages(admin, channelId, { streamType: "channel" }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    await expect(
+      harness.service.listMessages(admin, threadId, { streamType: "thread" }),
+    ).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  test("non-admin cannot delete channels they do not own", async () => {
+    const { orgId, admin } = await bootstrapOrg(harness.service);
+    const channelId = await harness.service.createChannel(admin, "cannot-delete-me", "private");
+    const bob = await principalFor(harness.service, orgId, "bob");
+    await expect(harness.service.deleteChannel(bob, channelId)).rejects.toBeInstanceOf(PermissionError);
+  });
+});

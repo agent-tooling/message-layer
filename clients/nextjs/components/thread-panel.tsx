@@ -153,6 +153,14 @@ export function ThreadPanel({
     setInput((current) => applyCommandSelection(current, name));
   }
 
+  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter") return;
+    if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (commandQuery === null || slashSuggestions.length === 0) return;
+    event.preventDefault();
+    selectCommand(slashSuggestions[0].name);
+  }
+
   async function uploadAttachment(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -270,6 +278,7 @@ export function ThreadPanel({
             className="h-24 w-full rounded-xl border border-zinc-700/80 bg-zinc-900/80 p-3 text-sm leading-relaxed outline-none transition focus:border-emerald-500/70"
             value={input}
             onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleComposerKeyDown}
             placeholder="Reply in thread... (@mention, /command)"
             data-testid="thread-input"
           />

@@ -231,6 +231,17 @@ export function createApp(service: MessageLayerService): Hono {
     }
   });
 
+  app.delete("/v1/channels/:channelId", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      await service.deleteChannel(auth.principal, c.req.param("channelId"));
+      return c.json({ ok: true });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
   app.post("/v1/channels/:channelId/members", async (c) => {
     const auth = authed(c);
     if ("response" in auth) return auth.response;

@@ -50,6 +50,8 @@ export type MlAppendResult =
       capability?: string;
     };
 
+type PermissionDecision = "open" | "approved" | "denied";
+
 export class MessageLayerClient {
   constructor(
     private readonly baseUrl: string,
@@ -82,6 +84,39 @@ export class MessageLayerClient {
       }
     }
     return { status: res.status, body: parsed as T };
+  }
+
+  private async getPermissionRequestStatus(requestId: string): Promise<PermissionDecision> {
+    try {
+      const { status, body } = await this.call<{ request?: { status?: PermissionDecision } }>(
+        "GET",
+        `/v1/permission-requests/${requestId}`,
+      );
+      if (status === 200) {
+        const requestStatus = (body as { request?: { status?: PermissionDecision } }).request?.status;
+        if (requestStatus === "open" || requestStatus === "approved" || requestStatus === "denied") {
+          return requestStatus;
+        }
+      }
+    } catch {
+      // best effort: assume still pending
+    }
+    return "open";
+  }
+
+  private async waitForPermissionDecision(
+    requestId: string,
+    opts: { timeoutMs?: number; pollIntervalMs?: number } = {},
+  ): Promise<PermissionDecision> {
+    const timeoutMs = opts.timeoutMs ?? Number(process.env.POET_PERMISSION_TIMEOUT_MS ?? "300000");
+    const pollIntervalMs = opts.pollIntervalMs ?? Number(process.env.POET_PERMISSION_POLL_MS ?? "2000");
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const status = await this.getPermissionRequestStatus(requestId);
+      if (status === "approved" || status === "denied") return status;
+      if (Date.now() >= deadline) return "open";
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
   }
 
   async health(): Promise<boolean> {
@@ -289,6 +324,18 @@ export class MessageLayerClient {
     | { ok: true; threadId: string }
     | { ok: false; code: "permission_denied" | "validation" | "not_found" | "unknown"; message: string; requestId?: string; capability?: string }
   > {
+    return this.createThreadInternal(channelId, parentMessageId, visibility, true);
+  }
+
+  private async createThreadInternal(
+    channelId: string,
+    parentMessageId: string,
+    visibility: "public" | "private",
+    waitOnDeny: boolean,
+  ): Promise<
+    | { ok: true; threadId: string }
+    | { ok: false; code: "permission_denied" | "validation" | "not_found" | "unknown"; message: string; requestId?: string; capability?: string }
+  > {
     const { status, body } = await this.call<{
       threadId?: string;
       error?: string;
@@ -326,6 +373,28 @@ export class MessageLayerClient {
           requestedVisibility: visibility,
         },
       );
+      if (waitOnDeny && requestId) {
+        const decision = await this.waitForPermissionDecision(requestId);
+        if (decision === "approved") {
+          return this.createThreadInternal(channelId, parentMessageId, visibility, false);
+        }
+        if (decision === "denied") {
+          return {
+            ok: false,
+            code: "permission_denied",
+            message: `request ${requestId} was denied by an admin`,
+            capability,
+            requestId,
+          };
+        }
+        return {
+          ok: false,
+          code: "permission_denied",
+          message: `request ${requestId} is still pending admin approval`,
+          capability,
+          requestId,
+        };
+      }
       return {
         ok: false,
         code: "permission_denied",
@@ -450,6 +519,28 @@ export class MessageLayerClient {
     }>("GET", `/v1/streams/${streamId}/subscribe?fromSeq=${fromSeq}`);
     if (status !== 200) throw new Error(`listStreamEvents failed ${status}: ${JSON.stringify(body)}`);
     return (body as { events: Array<any> }).events;
+  }
+
+  async listThreads(
+    channelId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      parentMessageId: string;
+      createdAt: string;
+      visibility: "private" | "public";
+    }>
+  > {
+    const { status, body } = await this.call<{
+      threads: Array<{
+        id: string;
+        parentMessageId: string;
+        createdAt: string;
+        visibility: "private" | "public";
+      }>;
+    }>("GET", `/v1/channels/${channelId}/threads`);
+    if (status !== 200) throw new Error(`listThreads failed ${status}: ${JSON.stringify(body)}`);
+    return (body as { threads: Array<any> }).threads;
   }
 
   async openPermissionRequest(

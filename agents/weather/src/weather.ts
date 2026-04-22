@@ -76,7 +76,7 @@ async function main(): Promise<void> {
     console.log(`[weather] could not register /weather-check yet: ${commandRegistration.message}`);
   }
 
-  const lastSeqByChannel = new Map<string, number>();
+  const lastSeqByStream = new Map<string, number>();
   const seenInvocationKeys = new Set<string>();
 
   for (;;) {
@@ -88,54 +88,72 @@ async function main(): Promise<void> {
     try {
       const channels = await scopedClient.listChannels();
       for (const channel of channels) {
-        const fromSeq = lastSeqByChannel.get(channel.id) ?? 0;
-        const events = await scopedClient.listStreamEvents(channel.id, fromSeq);
-        let maxSeq = fromSeq;
-        for (const event of events) {
-          if (typeof event.streamSeq === "number") maxSeq = Math.max(maxSeq, event.streamSeq);
-          if (event.type !== "command.invoked") continue;
-          const command = typeof event.payload.command === "string" ? event.payload.command : "";
-          if (!isWeatherCommand(command)) continue;
-          const ownerActorId = typeof event.payload.ownerActorId === "string" ? event.payload.ownerActorId : null;
-          if (ownerActorId && ownerActorId !== principal.actorId) continue;
-
-          const messageId = typeof event.payload.messageId === "string" ? event.payload.messageId : "";
-          const partIndex = typeof event.payload.partIndex === "number" ? event.payload.partIndex : -1;
-          const streamType = event.payload.streamType === "thread" ? "thread" : "channel";
-          const streamId = typeof event.payload.streamId === "string" ? event.payload.streamId : channel.id;
-          if (!messageId || partIndex < 0) continue;
-
-          const key = `${messageId}:${partIndex}`;
-          if (seenInvocationKeys.has(key)) continue;
-          seenInvocationKeys.add(key);
-
-          const parsedArgs = await resolveWeatherArgs({
-            client: scopedClient,
-            streamId,
-            messageId,
-            streamSeq:
-              typeof event.payload.streamSeq === "number" ? event.payload.streamSeq : event.streamSeq ?? 0,
-            partIndex,
-          });
-          const snapshot = buildWeatherSnapshot(parsedArgs);
-
-          const result = await postWeatherReply({
-            client: scopedClient,
-            streamType,
-            channelId: channel.id,
-            parentMessageId: messageId,
-            targetThreadId: streamType === "thread" ? streamId : null,
-            snapshot,
-          });
-          if (result.ok) {
-            console.log(`[weather] replied to /${command} with weather card (message ${result.messageId})`);
-          } else {
-            console.log(
-              `[weather] could not reply to /${command}: ${result.message}${result.requestId ? ` request=${result.requestId}` : ""}`,
-            );
-          }
+        const streamIds = [channel.id];
+        try {
+          const threads = await scopedClient.listThreads(channel.id);
+          for (const thread of threads) streamIds.push(thread.id);
+        } catch (error) {
+          console.log(
+            `[weather] could not list threads for #${channel.name}: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-        lastSeqByChannel.set(channel.id, maxSeq);
+        for (const streamId of streamIds) {
+          const fromSeq = lastSeqByStream.get(streamId) ?? 0;
+          const events = await scopedClient.listStreamEvents(streamId, fromSeq);
+          let maxSeq = fromSeq;
+          for (const event of events) {
+            if (typeof event.streamSeq === "number") maxSeq = Math.max(maxSeq, event.streamSeq);
+            if (event.type !== "command.invoked") continue;
+            const command = typeof event.payload.command === "string" ? event.payload.command : "";
+            if (!isWeatherCommand(command)) continue;
+            const ownerActorId = typeof event.payload.ownerActorId === "string" ? event.payload.ownerActorId : null;
+            if (ownerActorId && ownerActorId !== principal.actorId) continue;
+
+            const messageId = typeof event.payload.messageId === "string" ? event.payload.messageId : "";
+            const partIndex = typeof event.payload.partIndex === "number" ? event.payload.partIndex : -1;
+            const streamType = event.payload.streamType === "thread" ? "thread" : "channel";
+            const eventStreamId = typeof event.payload.streamId === "string" ? event.payload.streamId : streamId;
+            if (!messageId || partIndex < 0) continue;
+
+            const key = `${messageId}:${partIndex}`;
+            if (seenInvocationKeys.has(key)) continue;
+            seenInvocationKeys.add(key);
+
+            const parsedArgs = await resolveWeatherArgs({
+              client: scopedClient,
+              streamId: eventStreamId,
+              messageId,
+              streamSeq:
+                typeof event.payload.streamSeq === "number" ? event.payload.streamSeq : event.streamSeq ?? 0,
+              partIndex,
+            });
+            const snapshot = buildWeatherSnapshot(parsedArgs);
+
+            const result = await postWeatherReply({
+              client: scopedClient,
+              streamType,
+              channelId: channel.id,
+              parentMessageId: messageId,
+              targetThreadId: streamType === "thread" ? eventStreamId : null,
+              snapshot,
+            });
+            if (result.ok) {
+              console.log(`[weather] replied to /${command} with weather card (message ${result.messageId})`);
+            } else {
+              console.log(
+                `[weather] could not reply to /${command}: ${result.message}${result.requestId ? ` request=${result.requestId}` : ""}`,
+              );
+              if (
+                result.requestId &&
+                result.message.includes("still pending admin approval")
+              ) {
+                // Keep invocation eligible for retry after approval.
+                seenInvocationKeys.delete(key);
+              }
+            }
+          }
+          lastSeqByStream.set(streamId, maxSeq);
+        }
       }
     } catch (error) {
       console.error(`[weather] ${error instanceof Error ? error.message : String(error)}`);

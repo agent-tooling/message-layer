@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 // Some tests manage their own db lifecycle without using `harness`.
 // The outer `harness` is reset in beforeEach so the afterEach hook never
@@ -37,7 +38,7 @@ async function makeHarness(plugins: PluginConfigEntry[], env: NodeJS.ProcessEnv 
       bus,
       logger: () => {},
       env,
-      config: { port: 0, storage: { adapter: "pglite", path: "memory://plug" }, plugins },
+      config: { port: 0, storage: { adapter: "pglite", path: "memory://plug" }, artifacts: { kind: "memory" }, plugins },
     },
     instantiated,
   );
@@ -87,7 +88,7 @@ describe("built-in plugins", () => {
         bus,
         env: {},
         logger: (m) => logs.push(m),
-        config: { port: 0, storage: { adapter: "pglite", path: "x" }, plugins: [] },
+        config: { port: 0, storage: { adapter: "pglite", path: "x" }, artifacts: { kind: "memory" }, plugins: [] },
       },
       resolvePlugins([{ name: "request-logging", options: { prefix: "TST" } }]),
     );
@@ -148,7 +149,7 @@ describe("built-in plugins", () => {
         bus,
         env: {},
         logger: (m) => logs.push(m),
-        config: { port: 0, storage: { adapter: "pglite", path: "x" }, plugins: [] },
+        config: { port: 0, storage: { adapter: "pglite", path: "x" }, artifacts: { kind: "memory" }, plugins: [] },
       },
       resolvePlugins(["event-logger"]),
     );
@@ -161,13 +162,10 @@ describe("built-in plugins", () => {
   });
 
   test("webhooks plugin stores subscriptions and delivers matching events", async () => {
-    // Inject a deterministic DNS resolver so the SSRF guard does not hit
-    // real DNS for `example.com` on every delivery — keeps the test
-    // hermetic and deterministic in offline CI environments.
     harness = await makeHarness([
       {
         name: "webhooks",
-        options: { lookup: async () => [{ address: "93.184.216.34", family: 4 }] },
+        options: { allowPrivateNetworks: true },
       },
     ]);
     const orgId = await harness.service.createOrg("hooks");
@@ -180,16 +178,22 @@ describe("built-in plugins", () => {
     };
     const channelId = await harness.service.createChannel(admin, "general", "public");
 
-    const originalFetch = globalThis.fetch;
     const deliveries: Array<{ url: string; body: unknown }> = [];
-    globalThis.fetch = (async (input, init) => {
-      const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+    const sink = createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of req) chunks.push(Buffer.from(chunk));
+      const raw = Buffer.concat(chunks).toString("utf8");
       deliveries.push({
-        url: typeof input === "string" ? input : input.url,
-        body,
+        url: `http://127.0.0.1:${(sink.address() as { port: number }).port}${req.url ?? ""}`,
+        body: raw ? JSON.parse(raw) : {},
       });
-      return new Response(JSON.stringify({ ok: true }), { status: 200 });
-    }) as typeof globalThis.fetch;
+      res.statusCode = 200;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve) => sink.listen(0, "127.0.0.1", () => resolve()));
+    const sinkAddress = sink.address();
+    if (!sinkAddress || typeof sinkAddress === "string") throw new Error("failed to start sink");
 
     try {
       const create = await harness.app.fetch(
@@ -200,7 +204,7 @@ describe("built-in plugins", () => {
             "x-principal": JSON.stringify(admin),
           },
           body: JSON.stringify({
-            endpoint: "https://example.com/hooks/messages",
+            endpoint: `http://127.0.0.1:${sinkAddress.port}/hooks/messages`,
             eventTypes: ["message.appended"],
             streamId: channelId,
           }),
@@ -214,14 +218,12 @@ describe("built-in plugins", () => {
         idempotencyKey: "hook-1",
       });
       // One microtask was enough when the delivery path was a single
-      // `fetch` call, but the SSRF guard now awaits a DNS lookup (even
-      // when the lookup function is synchronous it still yields a
-      // microtask via `async`). Give it a small real-time window.
+      // `fetch` call; delivery remains async relative to appendMessage.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(deliveries.length).toBeGreaterThan(0);
-      expect(deliveries[0]?.url).toBe("https://example.com/hooks/messages");
+      expect(deliveries[0]?.url).toContain("/hooks/messages");
     } finally {
-      globalThis.fetch = originalFetch;
+      await new Promise<void>((resolve, reject) => sink.close((err) => (err ? reject(err) : resolve())));
     }
   });
 

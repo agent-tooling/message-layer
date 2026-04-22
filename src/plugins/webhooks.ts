@@ -315,6 +315,34 @@ export function webhookPlugin(options?: Record<string, unknown>): ServerPlugin {
         let success = false;
         let responseBody: string | null = null;
         let errorMessage: string | null = null;
+        if (event.streamId) {
+          try {
+            await ctx.service.assertCanReadStream(
+              { actorId: sub.actor_id, orgId: sub.org_id, scopes: [], provider: "webhook" },
+              event.streamId,
+            );
+          } catch (error) {
+            errorMessage = error instanceof Error ? `PERMISSION_DENIED: ${error.message}` : "PERMISSION_DENIED";
+            await ctx.db.query(
+              `INSERT INTO webhook_deliveries(
+                 id,subscription_id,org_id,event_type,stream_id,status_code,success,response_body,error_message,created_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+              [
+                deliveryId,
+                sub.id,
+                sub.org_id,
+                event.type,
+                event.streamId,
+                null,
+                0,
+                null,
+                errorMessage,
+                createdAt,
+              ],
+            );
+            return;
+          }
+        }
         const payload = {
           deliveryId,
           subscriptionId: sub.id,
