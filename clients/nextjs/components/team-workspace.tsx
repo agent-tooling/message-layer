@@ -1336,12 +1336,10 @@ export function TeamWorkspace() {
               </Badge>
             )}
             <details className="group relative">
-              <summary className="list-none">
-                <Button variant="outline" size="sm" className="gap-1">
-                  <Settings className="h-3.5 w-3.5" />
-                  Admin
-                  <ChevronDown className="h-3 w-3" />
-                </Button>
+              <summary className="inline-flex list-none cursor-pointer items-center gap-1 rounded-lg border border-zinc-700 bg-transparent px-3 py-2 text-xs font-medium text-zinc-200 shadow-sm transition hover:bg-zinc-800 hover:text-zinc-100">
+                <Settings className="h-3.5 w-3.5" />
+                Admin
+                <ChevronDown className="h-3 w-3" />
               </summary>
               <div className="absolute right-0 z-20 mt-1.5 min-w-44 rounded-lg border border-zinc-800 bg-zinc-950 p-1 shadow-lg shadow-black/50">
                 <Link

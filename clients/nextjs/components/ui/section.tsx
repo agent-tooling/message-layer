@@ -23,23 +23,25 @@ export function CollapsibleSection({
 
   return (
     <div className={cn("", className)}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-2 px-1 py-1.5 text-left"
-      >
-        <ChevronDown
-          className={cn(
-            "h-3.5 w-3.5 text-zinc-500 transition-transform duration-200",
-            !open && "-rotate-90",
-          )}
-        />
-        {icon && <span className="text-zinc-400">{icon}</span>}
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
-          {title}
-        </span>
+      <div className="flex w-full items-center gap-2 px-1 py-1.5">
+        <button
+          type="button"
+          onClick={() => setOpen(!open)}
+          className="flex items-center gap-2 text-left"
+        >
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 text-zinc-500 transition-transform duration-200",
+              !open && "-rotate-90",
+            )}
+          />
+          {icon && <span className="text-zinc-400">{icon}</span>}
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400">
+            {title}
+          </span>
+        </button>
         {badge}
-      </button>
+      </div>
       {open && <div className="mt-1">{children}</div>}
     </div>
   );
