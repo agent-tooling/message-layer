@@ -27,6 +27,7 @@ import {
   MailPlus,
   Copy,
   Trash2,
+  CheckCircle,
 } from "lucide-react";
 import { authClient } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
@@ -56,6 +57,7 @@ import { CollapsibleSection } from "@/components/ui/section";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Toaster, toast } from "@/components/ui/toast";
 
 type Channel = { id: string; name: string; visibility: string };
 type Message = {
@@ -173,6 +175,7 @@ export function TeamWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [showNewChannel, setShowNewChannel] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState("Message Layer");
 
   const activeThreads = threadsByChannel[activeChannelId] ?? [];
   const activeChannel =
@@ -419,6 +422,11 @@ export function TeamWorkspace() {
 
   useEffect(() => {
     if (!session) return;
+    void api<{ hasWorkspace: boolean; workspaceName: string | null }>(
+      "/api/team/setup",
+    ).then((result) => {
+      if (result.workspaceName) setWorkspaceName(result.workspaceName);
+    }).catch(() => {});
     void api<{ ok: true; defaultChannelId: string; actorId: string }>(
       "/api/team/bootstrap",
       { method: "POST" },
@@ -800,14 +808,21 @@ export function TeamWorkspace() {
   function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter") return;
     if (event.shiftKey || event.metaKey || event.ctrlKey || event.altKey) return;
-    if (commandQuery === null || slashSuggestions.length === 0) return;
+    if (commandQuery !== null && slashSuggestions.length > 0) {
+      event.preventDefault();
+      selectCommand(slashSuggestions[0].name);
+      return;
+    }
+    if (mentionQuery !== null && mentionSuggestions.length > 0) return;
     event.preventDefault();
-    selectCommand(slashSuggestions[0].name);
+    void sendMessage(event as unknown as React.FormEvent);
   }
 
   function copyInviteLink() {
     if (!inviteLink) return;
-    void navigator.clipboard?.writeText(inviteLink).catch(() => {});
+    void navigator.clipboard?.writeText(inviteLink).then(() => {
+      toast.success("Invite link copied to clipboard");
+    }).catch(() => {});
   }
 
   const publicChannels = channels.filter((c) => c.visibility === "public");
@@ -821,9 +836,11 @@ export function TeamWorkspace() {
         <div className="flex items-center justify-between px-4 py-4">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-100">
-              Message Layer
+              {workspaceName}
             </h2>
-            <p className="text-[11px] text-zinc-500">Team workspace</p>
+            <p className="text-[11px] text-zinc-500">
+              {humanMembers.length + agents.length} member{humanMembers.length + agents.length === 1 ? "" : "s"}
+            </p>
           </div>
           <div className="flex items-center gap-1">
             <Tooltip content="Invite teammate">
@@ -972,45 +989,54 @@ export function TeamWorkspace() {
             defaultOpen={false}
           >
             <div className="space-y-1">
-              {humanMembers.map((member) => (
-                <div
-                  key={member.actorId}
-                  className="group flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition hover:bg-zinc-800/50"
-                >
-                  <Avatar
-                    name={member.displayName}
-                    type={member.actorType}
-                    size="sm"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-xs font-medium text-zinc-200">
-                      {member.displayName}
-                    </p>
-                    <div className="flex items-center gap-1">
-                      {member.appRole && (
-                        <Badge variant="sky" className="text-[9px]">
-                          {member.appRole}
-                        </Badge>
+              {humanMembers.map((member) => {
+                const isMe = member.actorId === currentActorId;
+                return (
+                  <div
+                    key={member.actorId}
+                    className="group flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition hover:bg-zinc-800/50"
+                  >
+                    <div className="relative">
+                      <Avatar
+                        name={member.displayName}
+                        type={member.actorType}
+                        size="sm"
+                      />
+                      {isMe && (
+                        <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-zinc-950 bg-emerald-400" />
                       )}
                     </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-medium text-zinc-200">
+                        {member.displayName}
+                        {isMe && <span className="ml-1 text-[10px] text-zinc-500">(you)</span>}
+                      </p>
+                      <div className="flex items-center gap-1">
+                        {member.appRole && (
+                          <Badge variant={member.appRole === "owner" ? "amber" : member.appRole === "admin" ? "sky" : "secondary"} className="text-[9px]">
+                            {member.appRole}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                    {member.appRole !== "owner" && (
+                      <Select
+                        className="hidden h-6 w-20 text-[10px] group-hover:block"
+                        value={member.appRole ?? "member"}
+                        onChange={(e) =>
+                          void updateMemberRole(
+                            member.actorId,
+                            e.target.value === "admin" ? "admin" : "member",
+                          )
+                        }
+                      >
+                        <option value="member">member</option>
+                        <option value="admin">admin</option>
+                      </Select>
+                    )}
                   </div>
-                  {member.appRole !== "owner" && (
-                    <Select
-                      className="hidden h-6 w-20 text-[10px] group-hover:block"
-                      value={member.appRole ?? "member"}
-                      onChange={(e) =>
-                        void updateMemberRole(
-                          member.actorId,
-                          e.target.value === "admin" ? "admin" : "member",
-                        )
-                      }
-                    >
-                      <option value="member">member</option>
-                      <option value="admin">admin</option>
-                    </Select>
-                  )}
-                </div>
-              ))}
+                );
+              })}
               {humanMembers.length === 0 && (
                 <p className="px-2 text-xs text-zinc-500">No members yet.</p>
               )}
@@ -1361,19 +1387,29 @@ export function TeamWorkspace() {
               description="Say hi or wait for an agent to post."
             />
           ) : (
-            <div className="space-y-1">
-              {messages.map((message) => (
-                <MessageCard
-                  key={message.id}
-                  message={message}
-                  actorsById={actorsById}
-                  currentActorId={currentActorId}
-                  threads={threadsByParentMessage[message.id] ?? []}
-                  activeThreadId={activeThreadId}
-                  onCreateThread={createThreadFromMessage}
-                  onOpenThread={openThread}
-                />
-              ))}
+            <div>
+              {messages.map((message, idx) => {
+                const prev = idx > 0 ? messages[idx - 1] : null;
+                const isGrouped =
+                  prev !== null &&
+                  prev.actorId === message.actorId &&
+                  new Date(message.createdAt).getTime() -
+                    new Date(prev.createdAt).getTime() <
+                    5 * 60 * 1000;
+                return (
+                  <MessageCard
+                    key={message.id}
+                    message={message}
+                    actorsById={actorsById}
+                    currentActorId={currentActorId}
+                    threads={threadsByParentMessage[message.id] ?? []}
+                    activeThreadId={activeThreadId}
+                    onCreateThread={createThreadFromMessage}
+                    onOpenThread={openThread}
+                    isGrouped={isGrouped}
+                  />
+                );
+              })}
             </div>
           )}
         </div>
@@ -1561,44 +1597,73 @@ export function TeamWorkspace() {
             Invite teammate
           </DialogTitle>
           <DialogDescription>
-            Send an invite link via email to add people to your workspace.
+            Send an invite link to add people to your workspace.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-3">
-          <Input
-            placeholder="teammate@company.com"
-            type="email"
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-          />
-          <Select
-            value={inviteRole}
-            onChange={(e) =>
-              setInviteRole(e.target.value === "admin" ? "admin" : "member")
-            }
-          >
-            <option value="member">Member</option>
-            <option value="admin">Admin</option>
-          </Select>
-          <Button className="w-full" onClick={createInvite}>
-            Generate invite link
-          </Button>
+        <div className="space-y-4">
+          <div className="space-y-3">
+            <div>
+              <label className="mb-1.5 block text-[11px] font-medium text-zinc-400">
+                Email address
+              </label>
+              <Input
+                placeholder="teammate@company.com"
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-[11px] font-medium text-zinc-400">
+                Role
+              </label>
+              <Select
+                value={inviteRole}
+                onChange={(e) =>
+                  setInviteRole(e.target.value === "admin" ? "admin" : "member")
+                }
+              >
+                <option value="member">Member</option>
+                <option value="admin">Admin</option>
+              </Select>
+              <p className="mt-1 text-[10px] text-zinc-600">
+                {inviteRole === "admin" ? "Can manage channels, agents, and approve requests." : "Can send messages and join channels."}
+              </p>
+            </div>
+            <Button className="w-full" onClick={createInvite}>
+              <MailPlus className="mr-1.5 h-3.5 w-3.5" />
+              Generate invite link
+            </Button>
+          </div>
           {inviteLink && (
-            <div className="space-y-2 rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-              <p className="break-all text-xs text-emerald-300">{inviteLink}</p>
+            <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.03] p-4">
+              <div className="mb-2 flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/15">
+                  <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
+                </div>
+                <p className="text-xs font-medium text-emerald-300">Invite link ready</p>
+              </div>
+              <div className="rounded-lg border border-zinc-800/60 bg-zinc-950/60 px-3 py-2">
+                <p className="break-all font-mono text-[11px] leading-relaxed text-zinc-300">{inviteLink}</p>
+              </div>
               <Button
                 variant="outline"
                 size="sm"
-                className="w-full"
+                className="mt-2.5 w-full"
                 onClick={copyInviteLink}
               >
                 <Copy className="mr-1.5 h-3 w-3" />
-                Copy link
+                Copy to clipboard
               </Button>
+              <p className="mt-2 text-center text-[10px] text-zinc-600">
+                Share this link with your teammate to join the workspace.
+              </p>
             </div>
           )}
         </div>
       </Dialog>
+
+      <Toaster />
     </div>
   );
 }

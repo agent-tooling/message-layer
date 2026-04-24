@@ -44,6 +44,7 @@ type Props = {
   activeThreadId: string | null;
   onCreateThread: (parentMessageId: string) => void;
   onOpenThread: (threadId: string) => void;
+  isGrouped?: boolean;
 };
 
 function senderLabel(message: Message, actorsById: Record<string, Actor>, currentActorId: string | null) {
@@ -87,33 +88,45 @@ export function MessageCard({
   activeThreadId,
   onCreateThread,
   onOpenThread,
+  isGrouped = false,
 }: Props) {
   const sender = senderLabel(message, actorsById, currentActorId);
   const contentParts = message.parts.filter((part) => part.type !== "tool_call" && part.type !== "tool_result");
   const toolParts = message.parts.filter((part) => part.type === "tool_call" || part.type === "tool_result");
 
   return (
-    <div className="group flex gap-3 rounded-lg px-3 py-2.5 transition hover:bg-zinc-900/40">
-      <Avatar
-        name={sender.name}
-        type={sender.tag}
-        size="md"
-        className="mt-0.5"
-      />
-      <div className="min-w-0 flex-1">
-        {/* Header */}
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-zinc-100">{sender.name}</span>
-          <Badge
-            variant={sender.isAgent ? "emerald" : sender.tag === "app" ? "indigo" : "secondary"}
-          >
-            {sender.tag}
-          </Badge>
-          <span className="text-[11px] text-zinc-600">{formatTime(message.createdAt)}</span>
+    <div className={cn(
+      "group flex gap-3 rounded-lg px-3 transition hover:bg-zinc-900/40",
+      isGrouped ? "py-0.5" : "py-2.5",
+    )}>
+      {isGrouped ? (
+        <div className="w-8 shrink-0 pt-1 text-center">
+          <span className="hidden text-[10px] text-zinc-600 group-hover:inline">
+            {formatTime(message.createdAt)}
+          </span>
         </div>
+      ) : (
+        <Avatar
+          name={sender.name}
+          type={sender.tag}
+          size="md"
+          className="mt-0.5"
+        />
+      )}
+      <div className="min-w-0 flex-1">
+        {!isGrouped && (
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-zinc-100">{sender.name}</span>
+            <Badge
+              variant={sender.isAgent ? "emerald" : sender.tag === "app" ? "indigo" : "secondary"}
+            >
+              {sender.tag}
+            </Badge>
+            <span className="text-[11px] text-zinc-600">{formatTime(message.createdAt)}</span>
+          </div>
+        )}
 
-        {/* Content */}
-        <div className="mt-1 space-y-1.5">
+        <div className={cn("space-y-1.5", !isGrouped && "mt-1")}>
           {contentParts.map((part, index) => (
             <MessagePartView key={index} part={part} />
           ))}
