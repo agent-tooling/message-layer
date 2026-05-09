@@ -52,6 +52,12 @@ driving external runtimes.
 Events whose scope is "stream" carry a non-null `streamSeq`. Org-scope events
 carry `streamSeq: null`.
 
+Transport attribution note: the current `message.appended` payload includes
+`actorId` but not a first-class transport/provider field. The proposed Telegram
+bridge spec defines this as a gap to close so audit trails can consistently
+capture both human actor and ingress transport. See
+[telegram-bridge.md](./telegram-bridge.md).
+
 ## Subscription semantics
 
 Two transports expose the same event stream:

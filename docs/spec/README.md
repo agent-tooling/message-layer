@@ -31,6 +31,7 @@ Non-goals:
 ### Extensions
 
 - [plugins.md](./plugins.md) — plugin system: built-in plugins, options, authoring guide
+- [telegram-bridge.md](./telegram-bridge.md) — proposed Telegram bridge MVP contract
 
 ### Client SDK
 

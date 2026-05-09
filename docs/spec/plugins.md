@@ -222,6 +222,31 @@ Subscription body:
 
 ---
 
+### `telegram-bridge` (proposed)
+
+Status: **design draft, not implemented yet**. See
+[telegram-bridge.md](./telegram-bridge.md).
+
+This plugin defines an explicit one-chat Telegram projection for a single
+human + channel binding:
+
+- inbound Telegram messages append to message-layer as the bound human actor
+- outbound agent/app channel replies project to the same Telegram chat
+- message-layer remains canonical for permissions, privacy, and audit
+
+**Proposed routes:**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/bridges/telegram/setups` | Register bot token and create setup. |
+| `GET` | `/v1/bridges/telegram/setups` | List setups. |
+| `GET` | `/v1/bridges/telegram/setups/:setupId` | Read setup status and binding. |
+| `POST` | `/v1/bridges/telegram/setups/:setupId/disable` | Disable setup. |
+| `POST` | `/v1/bridges/telegram/setups/:setupId/rotate-webhook-secret` | Rotate webhook secret and re-register webhook. |
+| `POST` | `/v1/bridges/telegram/webhook/:setupId` | Telegram webhook ingress endpoint. |
+
+---
+
 ### `memory`
 
 Derives reusable **memory units** from text parts of `message.appended`
