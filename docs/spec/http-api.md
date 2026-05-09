@@ -704,12 +704,11 @@ Enable or disable a subscription.
 
 **Response** `200` — `{ "ok": true }`
 
-## Telegram bridge (proposed)
+## Telegram bridge (provided by the `telegram-bridge` plugin)
 
-Status: **design draft, not implemented yet**. Endpoint contract and lifecycle:
-[telegram-bridge.md](./telegram-bridge.md).
+Endpoint contract and lifecycle: [telegram-bridge.md](./telegram-bridge.md).
 
-Planned routes:
+Routes:
 
 - `POST /v1/bridges/telegram/setups`
 - `GET /v1/bridges/telegram/setups`

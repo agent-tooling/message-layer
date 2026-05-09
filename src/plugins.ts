@@ -13,6 +13,7 @@ import { searchPlugin } from "./plugins/search.js";
 import { webhookPlugin } from "./plugins/webhooks.js";
 import { websocketPlugin } from "./plugins/websocket.js";
 import { durableStreamsStoragePlugin } from "./plugins/durable-streams-storage.js";
+import { telegramBridgePlugin } from "./plugins/telegram-bridge.js";
 import type { DomainEvent } from "./types.js";
 
 export type PluginLogger = (message: string) => unknown;
@@ -69,6 +70,7 @@ export const builtInPluginFactories: Record<string, PluginFactory> = {
   "durable-streams": durableStreamsPlugin,
   "durable-streams-storage": durableStreamsStoragePlugin,
   websocket: websocketPlugin,
+  "telegram-bridge": telegramBridgePlugin,
 };
 
 export type PluginSpec = string | { name: string; options?: Record<string, unknown> } | ServerPlugin;

@@ -316,6 +316,18 @@ Delivers domain events as outbound HTTP POST requests to registered subscriber U
 - Adds `GET /v1/webhooks/subscriptions` — list subscriptions
 - Adds `PATCH /v1/webhooks/subscriptions/:id` — enable/disable
 
+#### `telegram-bridge`
+Bridges one Telegram bot/chat to one human + one channel binding. Inbound Telegram
+messages append into message-layer as the bound human actor (`provider: "bridge:telegram"`),
+and outbound agent/app channel messages are projected back to Telegram.
+
+- Adds `POST /v1/bridges/telegram/setups` — create setup + register webhook
+- Adds `GET /v1/bridges/telegram/setups` — list setups
+- Adds `GET /v1/bridges/telegram/setups/:id` — read setup
+- Adds `POST /v1/bridges/telegram/setups/:id/disable` — disable setup
+- Adds `POST /v1/bridges/telegram/setups/:id/rotate-webhook-secret` — rotate Telegram webhook secret
+- Adds `POST /v1/bridges/telegram/webhook/:id` — Telegram ingress endpoint
+
 #### `memory`
 Derives reusable **memory units** from text parts of `message.appended` events. Units are normalized, chunked, deduplicated by content hash, and tagged with extracted keywords — never a 1:1 copy of message text. Source `streamId` / `streamType` / `visibility` are snapshotted at insert time so derived data cannot widen retroactively.
 
@@ -443,6 +455,9 @@ Every authenticated request carries an `x-principal` JSON header. See [`docs/spe
 | `POST` | `/v1/webhooks/subscriptions` | Create webhook subscription (`webhooks` plugin) |
 | `GET` | `/v1/webhooks/subscriptions` | List webhook subscriptions (`webhooks` plugin) |
 | `PATCH` | `/v1/webhooks/subscriptions/:id` | Enable/disable webhook (`webhooks` plugin) |
+| `POST` | `/v1/bridges/telegram/setups` | Create Telegram bridge setup (`telegram-bridge` plugin) |
+| `GET` | `/v1/bridges/telegram/setups` | List Telegram bridge setups (`telegram-bridge` plugin) |
+| `POST` | `/v1/bridges/telegram/webhook/:id` | Telegram webhook ingress (`telegram-bridge` plugin) |
 | `GET` | `/v1/memory?streamId=…` | List memory units bound to a stream (`memory` plugin) |
 | `GET` | `/v1/memory/search?q=…` | Lexical search over visible memory (`memory` plugin) |
 | `GET` | `/v1/memory/:id` | Fetch one memory unit (`memory` plugin) |

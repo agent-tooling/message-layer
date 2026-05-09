@@ -1,6 +1,6 @@
 # Telegram bridge (MVP proposal)
 
-Status: **proposed** (design draft, not implemented yet)
+Status: **implemented (MVP)**
 
 This document turns the Telegram bridge intent into an implementation-ready
 spec that matches message-layer principles:
@@ -104,7 +104,7 @@ Idempotent projection to Telegram.
 - `status` (`sent` | `failed`)
 - unique `(setup_id, source_message_id)`
 
-## 5) REST API contract (proposed)
+## 5) REST API contract
 
 All management routes require `x-principal`.
 
@@ -161,7 +161,7 @@ history.
 
 Rotate secret token; re-issues `setWebhook`.
 
-## 6) Webhook endpoint contract (proposed)
+## 6) Webhook endpoint contract
 
 ### `POST /v1/bridges/telegram/webhook/:setupId`
 
@@ -204,7 +204,7 @@ On permission deny:
 - Do not retry append.
 - Optionally send one Telegram notice: "Message not delivered: missing permission."
 
-## 7) Outbound projection contract (proposed)
+## 7) Outbound projection contract
 
 Outbound is event-driven from `message.appended`:
 
@@ -244,20 +244,22 @@ Derived/bridged data visibility:
 - Telegram output is only for the explicitly bound chat and channel.
 - No org-wide fanout.
 
-## 9) Audit and observability gaps to close
+## 9) Audit and observability notes
 
-To satisfy "actor + transport" traceability cleanly, add one of:
+Inbound bridge appends include transport metadata in the text part payload:
+`payload.transport = "telegram"` plus a `payload.telegram` object carrying
+`setupId`, `updateId`, `messageId`, and `chatId`.
 
-1. **Preferred**: include `provider` in `message.appended` payload and audit row
-   payload for append operations.
-2. **Alternative**: add plugin bridge-audit rows plus `audit.logged` entries via a
-   core helper (`recordAuditNote`) for setup/bind/inbound/outbound outcomes.
+Plugin-owned tables also persist delivery outcomes:
+
+- `telegram_bridge_inbound_updates`
+- `telegram_bridge_outbound_deliveries`
 
 Minimum required logs:
 
-- setup created/disabled
+- setup created/disabled/rotated
 - chat bound
-- inbound accepted/denied/ignored
+- inbound accepted/denied/ignored/error
 - outbound sent/failed
 
 ## 10) Security requirements
