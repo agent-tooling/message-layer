@@ -24,6 +24,7 @@ import { healthMetaPlugin } from "../../src/plugins/health-meta.js";
 import { memoryPlugin } from "../../src/plugins/memory.js";
 import { requestLoggingPlugin } from "../../src/plugins/request-logging.js";
 import { searchPlugin } from "../../src/plugins/search.js";
+import { telegramBridgePlugin } from "../../src/plugins/telegram-bridge.js";
 import { webhookPlugin } from "../../src/plugins/webhooks.js";
 import { websocketPlugin } from "../../src/plugins/websocket.js";
 
@@ -47,6 +48,12 @@ describe("plugin factory names", () => {
     expect(memoryPlugin().name).toBe("memory");
     expect(requestLoggingPlugin().name).toBe("request-logging");
     expect(searchPlugin().name).toBe("search");
+    expect(
+      telegramBridgePlugin({
+        publicBaseUrl: "https://ml.example.com",
+        webhookSecretSigningKey: "subpath-test-secret",
+      }).name,
+    ).toBe("telegram-bridge");
     expect(webhookPlugin().name).toBe("webhooks");
     expect(websocketPlugin().name).toBe("websocket");
   });
@@ -196,6 +203,28 @@ describe("plugin subpaths via startServer()", () => {
       body: JSON.stringify({ name: "EventOrg" }),
     });
     expect(logs.some((l) => l.includes("[evt-subpath]") && l.includes("org.created"))).toBe(true);
+  });
+
+  test("telegramBridgePlugin() imported from subpath mounts bridge routes", async () => {
+    server = await startServer({
+      port: 0,
+      logger: () => {},
+      config: {
+        ...defaultServerConfig({}),
+        plugins: [
+          telegramBridgePlugin({
+            publicBaseUrl: "https://ml.example.com",
+            webhookSecretSigningKey: "subpath-telegram-secret",
+            // Route mount check only; no Telegram API calls expected in this test.
+            telegramApiBaseUrl: "http://127.0.0.1:1",
+          }),
+        ],
+        port: 0,
+      },
+    });
+    const res = await fetch(`${server.address}/v1/bridges/telegram/setups`);
+    // Route exists and requires a principal.
+    expect(res.status).toBe(401);
   });
 
   test("websocketPlugin() replaces config websocket flag: server accepts WS connections", async () => {

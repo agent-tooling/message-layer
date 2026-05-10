@@ -23,7 +23,7 @@ object with the following shape:
 | `actorId`  | yes      | The actor this request acts as. Must belong to `orgId`.                    |
 | `orgId`    | yes      | Tenant the actor belongs to.                                                |
 | `scopes`   | yes      | Host-granted capability scopes that bypass per-resource grant checks.       |
-| `provider` | yes      | Free-form identifier of the upstream auth provider (e.g. `better-auth`).   |
+| `provider` | yes      | Free-form identifier of the upstream auth provider or transport (e.g. `better-auth`, `bridge:telegram`). |
 
 Principals are serialized as JSON and passed in the `x-principal` HTTP header.
 

@@ -58,6 +58,10 @@
       "import": "./dist/plugins/websocket.js",
       "types": "./dist/plugins/websocket.d.ts"
     },
+    "./plugins/telegram-bridge": {
+      "import": "./dist/plugins/telegram-bridge.js",
+      "types": "./dist/plugins/telegram-bridge.d.ts"
+    },
     "./storage/pglite": {
       "import": "./dist/storage/pglite.js",
       "types": "./dist/storage/pglite.d.ts"

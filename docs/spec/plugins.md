@@ -18,6 +18,7 @@ import { healthMetaPlugin }     from "message-layer/plugins/health-meta";
 import { apiKeyAuthPlugin }     from "message-layer/plugins/api-key-auth";
 import { eventLoggerPlugin }    from "message-layer/plugins/event-logger";
 import { webhookPlugin }        from "message-layer/plugins/webhooks";
+import { telegramBridgePlugin } from "message-layer/plugins/telegram-bridge";
 import { websocketPlugin }      from "message-layer/plugins/websocket";
 import { memoryPlugin }         from "message-layer/plugins/memory";
 import { searchPlugin }         from "message-layer/plugins/search";
@@ -28,6 +29,10 @@ await startServer({
     requestLoggingPlugin({ prefix: "[app]" }),
     healthMetaPlugin({ version: "2.0.0" }),
     apiKeyAuthPlugin({ strict: true }),
+    telegramBridgePlugin({
+      publicBaseUrl: "https://ml.example.com",
+      webhookSecretSigningKey: process.env.TELEGRAM_WEBHOOK_SECRET_KEY!,
+    }),
     websocketPlugin(),
   ],
 });
@@ -219,6 +224,41 @@ Subscription body:
   "streamId": "channel_abc123"
 }
 ```
+
+---
+
+### `telegram-bridge`
+
+See [telegram-bridge.md](./telegram-bridge.md) for the full lifecycle and data
+model contract.
+
+This plugin defines an explicit one-chat Telegram projection for a single
+human + channel binding:
+
+- inbound Telegram messages append to message-layer as the bound human actor
+- outbound agent/app channel replies project to the same Telegram chat
+- message-layer remains canonical for permissions, privacy, and audit
+
+**Routes added:**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v1/bridges/telegram/setups` | Register bot token and create setup. |
+| `GET` | `/v1/bridges/telegram/setups` | List setups. |
+| `GET` | `/v1/bridges/telegram/setups/:setupId` | Read setup status and binding. |
+| `POST` | `/v1/bridges/telegram/setups/:setupId/disable` | Disable setup. |
+| `POST` | `/v1/bridges/telegram/setups/:setupId/rotate-webhook-secret` | Rotate webhook secret and re-register webhook. |
+| `POST` | `/v1/bridges/telegram/webhook/:setupId` | Telegram webhook ingress endpoint. |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `mountPath` | `string` | `"/v1/bridges/telegram"` | Base route path for setup + webhook endpoints. |
+| `publicBaseUrl` | `string` | `process.env.PUBLIC_BASE_URL` | Public HTTPS origin used to derive webhook URLs. |
+| `webhookSecretSigningKey` | `string` | `process.env.TELEGRAM_WEBHOOK_SECRET_KEY` | Server-side secret used to derive per-setup webhook secret tokens and encrypt bot tokens at rest. |
+| `telegramApiBaseUrl` | `string` | `"https://api.telegram.org"` | Telegram Bot API origin (override in tests/self-hosted gateways). |
+| `requestTimeoutMs` | `number` | `5000` | Timeout for Telegram API calls (`getMe`, `setWebhook`, `deleteWebhook`, `sendMessage`). |
+
+See [http-api.md](./http-api.md) for full request/response shapes.
 
 ---
 

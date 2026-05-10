@@ -52,6 +52,11 @@ driving external runtimes.
 Events whose scope is "stream" carry a non-null `streamSeq`. Org-scope events
 carry `streamSeq: null`.
 
+Transport attribution note: `message.appended` payloads include `actorId`; bridge
+transports may additionally annotate message part payloads with transport
+metadata (for Telegram: `payload.transport = "telegram"` plus
+`payload.telegram`). See [telegram-bridge.md](./telegram-bridge.md).
+
 ## Subscription semantics
 
 Two transports expose the same event stream:
