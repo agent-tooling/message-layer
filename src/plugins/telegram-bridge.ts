@@ -753,10 +753,16 @@ export function telegramBridgePlugin(options?: Record<string, unknown>): ServerP
               },
             ],
             idempotencyKey: `tg:${setup.id}:${parsedUpdate.update_id}:${inboundMessage.message_id}`,
+            autoRequestOnDeny: true,
           });
           if ("denied" in append && append.denied) {
             await finish("denied", { error: "message-append-denied" });
-            return c.json({ ok: true, denied: true, reason: "message-append-denied" });
+            return c.json({
+              ok: true,
+              denied: true,
+              reason: "message-append-denied",
+              requestId: append.requestId,
+            });
           }
           await finish("accepted", { messageId: append.messageId });
           return c.json({ ok: true, messageId: append.messageId });
