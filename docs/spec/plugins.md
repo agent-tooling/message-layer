@@ -258,6 +258,8 @@ human + channel binding:
 | `telegramApiBaseUrl` | `string` | `"https://api.telegram.org"` | Telegram Bot API origin (override in tests/self-hosted gateways). |
 | `requestTimeoutMs` | `number` | `5000` | Timeout for Telegram API calls (`getMe`, `setWebhook`, `deleteWebhook`, `sendMessage`). |
 
+See [http-api.md](./http-api.md) for full request/response shapes.
+
 ---
 
 ### `memory`

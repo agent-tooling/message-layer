@@ -708,14 +708,102 @@ Enable or disable a subscription.
 
 Endpoint contract and lifecycle: [telegram-bridge.md](./telegram-bridge.md).
 
-Routes:
+### `POST /v1/bridges/telegram/setups`
 
-- `POST /v1/bridges/telegram/setups`
-- `GET /v1/bridges/telegram/setups`
-- `GET /v1/bridges/telegram/setups/:setupId`
-- `POST /v1/bridges/telegram/setups/:setupId/disable`
-- `POST /v1/bridges/telegram/setups/:setupId/rotate-webhook-secret`
-- `POST /v1/bridges/telegram/webhook/:setupId`
+Create a Telegram bridge setup. Validates the bot token via Telegram `getMe`
+and registers a webhook via `setWebhook`.
+
+**Request**
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `humanActorId` | string | yes | Human actor that inbound Telegram messages should be attributed to. |
+| `channelId` | string | yes | Target channel id for inbound appends and outbound relay. |
+| `botToken` | string | yes | Telegram bot token from BotFather. |
+| `autoBindOnFirstMessage` | boolean | no | Defaults to `true`; when enabled, first accepted private inbound message binds the chat id. |
+
+**Response** `200`
+```json
+{
+  "setupId": "string",
+  "status": "pending_bind",
+  "webhookUrl": "https://.../v1/bridges/telegram/webhook/<setupId>",
+  "bot": { "id": "777001", "username": "bridge_bot" }
+}
+```
+
+### `GET /v1/bridges/telegram/setups`
+
+List bridge setups visible to the principal.
+
+**Response** `200`
+```json
+{
+  "setups": [{
+    "setupId": "string",
+    "orgId": "string",
+    "humanActorId": "string",
+    "channelId": "string",
+    "bot": { "id": "777001", "username": "bridge_bot" },
+    "status": "pending_bind|active|disabled|error",
+    "boundChatId": "string | null",
+    "boundChatType": "private | null",
+    "autoBindOnFirstMessage": true,
+    "lastError": "string | null",
+    "createdAt": "ISO-8601",
+    "updatedAt": "ISO-8601",
+    "disabledAt": "ISO-8601 | null",
+    "webhookUrl": "https://..."
+  }]
+}
+```
+
+### `GET /v1/bridges/telegram/setups/:setupId`
+
+Read one setup by id (same visibility rules as list).
+
+**Response** `200` — `{ "setup": ... }` (same shape as list row)
+
+### `POST /v1/bridges/telegram/setups/:setupId/disable`
+
+Disable setup and issue best-effort Telegram `deleteWebhook`.
+
+**Response** `200` — `{ "ok": true, "setup": ... }`
+
+### `POST /v1/bridges/telegram/setups/:setupId/rotate-webhook-secret`
+
+Rotate the webhook secret and re-register Telegram webhook for the setup.
+
+**Response** `200` — `{ "ok": true, "setup": ... }`
+
+### `POST /v1/bridges/telegram/webhook/:setupId`
+
+Telegram webhook ingress endpoint.
+
+Authentication:
+
+- requires `X-Telegram-Bot-Api-Secret-Token` to match the setup's derived token
+- invalid token returns `401`
+
+Accepted update shape (subset):
+
+```json
+{
+  "update_id": 1001,
+  "message": {
+    "message_id": 55,
+    "text": "hello from telegram",
+    "chat": { "id": "4444", "type": "private" }
+  }
+}
+```
+
+Response cases:
+
+- `200` with `{ "ok": true, "messageId": "..." }` when accepted
+- `200` with `{ "ok": true, "duplicate": true }` when deduped
+- `200` with `{ "ok": true, "ignored": true, "reason": "..." }` for unsupported payloads/chat mismatch
+- `200` with `{ "ok": true, "denied": true, "reason": "message-append-denied" }` when append is permission-denied
+- `401` on secret mismatch
 
 ## Clients
 

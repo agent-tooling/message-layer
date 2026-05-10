@@ -1,7 +1,5 @@
 # Telegram bridge
 
-Status: **implemented (MVP)**
-
 The Telegram bridge is a plugin transport that projects one Telegram bot/chat
 to one human actor + one channel binding.
 
