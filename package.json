@@ -22,6 +22,10 @@
       "import": "./dist/plugins/api-key-auth.js",
       "types": "./dist/plugins/api-key-auth.d.ts"
     },
+    "./plugins/principal-token-auth": {
+      "import": "./dist/plugins/principal-token-auth.js",
+      "types": "./dist/plugins/principal-token-auth.d.ts"
+    },
     "./plugins/durable-streams": {
       "import": "./dist/plugins/durable-streams.js",
       "types": "./dist/plugins/durable-streams.d.ts"

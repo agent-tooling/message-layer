@@ -8,6 +8,7 @@ import { durableStreamsPlugin } from "./plugins/durable-streams.js";
 import { eventLoggerPlugin } from "./plugins/event-logger.js";
 import { healthMetaPlugin } from "./plugins/health-meta.js";
 import { memoryPlugin } from "./plugins/memory.js";
+import { principalTokenAuthPlugin } from "./plugins/principal-token-auth.js";
 import { requestLoggingPlugin } from "./plugins/request-logging.js";
 import { searchPlugin } from "./plugins/search.js";
 import { webhookPlugin } from "./plugins/webhooks.js";
@@ -63,6 +64,7 @@ export const builtInPluginFactories: Record<string, PluginFactory> = {
   "request-logging": requestLoggingPlugin,
   "health-meta": healthMetaPlugin,
   "api-key-header-auth": apiKeyAuthPlugin,
+  "principal-token-auth": principalTokenAuthPlugin,
   "event-logger": eventLoggerPlugin,
   memory: memoryPlugin,
   search: searchPlugin,

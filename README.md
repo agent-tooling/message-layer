@@ -138,6 +138,7 @@ new MessageLayerClient({ ..., apiKey: "...", apiKeyHeader: "x-ml-secret" })
 | `ARTIFACTS_S3_SECRET_ACCESS_KEY` | _(AWS credential chain)_ | Static secret access key |
 | `PLUGINS` | _(none)_ | Comma-separated plugin names, e.g. `request-logging,webhooks` |
 | `MESSAGE_LAYER_API_KEY` | _(none)_ | Shared secret for `api-key-header-auth` plugin |
+| `MESSAGE_LAYER_TOKEN_SECRET` | _(none)_ | HS256 signing secret for `principal-token-auth` plugin |
 | `MESSAGE_LAYER_CONFIG` | _(none)_ | Full config as JSON string (overrides individual env vars) |
 
 ---
@@ -301,6 +302,49 @@ MESSAGE_LAYER_API_KEY=secret \
 PLUGINS=api-key-header-auth \
 node dist/server.js
 ```
+
+#### `principal-token-auth`
+Browser-friendly token authentication. The host application mints a short-lived HS256 JWT identifying an actor; the plugin verifies it and injects `x-principal` (and optionally `x-api-key`) so downstream handlers — and the WebSocket upgrade — see a fully authenticated request **without** the browser ever holding the long-lived API key.
+
+Accepts the token as:
+
+- `Authorization: Bearer <jwt>` header (HTTP)
+- `?token=<jwt>` query parameter (HTTP and WebSocket — browsers cannot set headers on `WebSocket()` construction)
+
+| Option | Default | Description |
+|---|---|---|
+| `envKey` | `MESSAGE_LAYER_TOKEN_SECRET` | Env variable holding the HS256 signing secret |
+| `queryName` | `token` | Query parameter name for browser clients |
+| `injectApiKey` | `false` | If `true`, also inject `x-api-key` after validation so `api-key-header-auth` accepts the request |
+| `apiKeyEnvKey` | `MESSAGE_LAYER_API_KEY` | Env variable read when `injectApiKey` is true |
+| `apiKeyHeader` | `x-api-key` | Header name to inject the API key under |
+| `protectedPrefixes` | `["/v1/"]` | Path prefixes the plugin acts on |
+| `replayWindowSeconds` | `0` (disabled) | Track `jti` per token in-process; reject replays within this window |
+
+Token claims (HS256 JWT):
+
+```json
+{
+  "sub": "actor_<id>",
+  "oid": "org_<id>",
+  "scp": ["channel:admin", "message:append"],
+  "pvd": "homebrewtales/web",
+  "iat": 1779000000,
+  "exp": 1779003600,
+  "jti": "unique-id"
+}
+```
+
+A helper `mintPrincipalToken({ secret, actorId, orgId, scopes, ttlSeconds, jti })` is exported from `message-layer/plugins/principal-token-auth` for trusted host code.
+
+```bash
+MESSAGE_LAYER_API_KEY=secret \
+MESSAGE_LAYER_TOKEN_SECRET=token-secret \
+PLUGINS=api-key-header-auth,principal-token-auth,websocket \
+node dist/server.js
+```
+
+**Plugin ordering matters when used together with `api-key-header-auth`:** register `api-key-header-auth` first and `principal-token-auth` second. Both hook the `upgrade` event with `prependListener`, so the later registration runs first on upgrade — that's what allows `principal-token-auth` to inject `x-api-key` before the api-key plugin checks for it.
 
 #### `event-logger`
 Logs every domain event emitted by the service.
