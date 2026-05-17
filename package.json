@@ -62,10 +62,6 @@
       "import": "./dist/plugins/websocket.js",
       "types": "./dist/plugins/websocket.d.ts"
     },
-    "./plugins/telegram-bridge": {
-      "import": "./dist/plugins/telegram-bridge.js",
-      "types": "./dist/plugins/telegram-bridge.d.ts"
-    },
     "./storage/pglite": {
       "import": "./dist/storage/pglite.js",
       "types": "./dist/storage/pglite.d.ts"
@@ -87,6 +83,7 @@
     "dev:plugins:nextjs-demo": "PLUGINS=request-logging,health-meta,api-key-header-auth,event-logger,memory,search,webhooks,durable-streams,durable-streams-storage,websocket tsx src/server.ts",
     "start": "node --enable-source-maps dist/server.js",
     "build": "tsc -p tsconfig.build.json",
+    "prepare": "tsc -p tsconfig.build.json || true",
     "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "test:watch": "vitest",
