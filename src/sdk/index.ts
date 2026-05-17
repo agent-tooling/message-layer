@@ -395,6 +395,15 @@ export class MessageLayerClient {
     return this.request("/v1/orgs", { method: "POST", body: { name }, noAuth: true });
   }
 
+  /**
+   * Hard-delete an org and every row that belongs to it. Requires an
+   * authenticated principal that lives in the target org and carries the
+   * `org:admin` scope.
+   */
+  async deleteOrg(orgId: string): Promise<void> {
+    await this.request(`/v1/orgs/${orgId}`, { method: "DELETE" });
+  }
+
   // ── Actors ───────────────────────────────────────────────────────────────
 
   /** Create an actor. Unauthenticated — no principal required. */

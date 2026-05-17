@@ -185,6 +185,19 @@ export function createApp(service: MessageLayerService): Hono {
     return result.ok ? { principal: result.principal } : { response: result.response };
   };
 
+  // Hard-delete an entire org. Authenticated; the principal must be in the
+  // org and carry `org:admin`. See `service.deleteOrg` for the rationale.
+  app.delete("/v1/orgs/:orgId", async (c) => {
+    const auth = authed(c);
+    if ("response" in auth) return auth.response;
+    try {
+      await service.deleteOrg(auth.principal, c.req.param("orgId"));
+      return c.json({ ok: true });
+    } catch (e) {
+      return handleError(c, e);
+    }
+  });
+
   app.get("/v1/actors", async (c) => {
     const auth = authed(c);
     if ("response" in auth) return auth.response;

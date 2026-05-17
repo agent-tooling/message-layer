@@ -777,6 +777,129 @@ export class MessageLayer {
     return orgId;
   }
 
+  /**
+   * Hard-delete an entire org and every row that belongs to it. This is the
+   * "tenant offboarding" hammer — channels, threads, messages, artifacts
+   * (incl. blob bytes), grants, permission requests, registered commands,
+   * cursors, clients, memberships, actors, events, and audit history all
+   * go away in a single transaction.
+   *
+   * Authorization:
+   *   - principal must be an actor in the target org
+   *   - principal must carry the `org:admin` scope (this is intentionally
+   *     scope-only — we don't grant `org:admin` through the regular grant
+   *     flow because nobody inside an org should be able to grant it to
+   *     themselves. The host application (apps/web) sets it on its own
+   *     system principal when it owns the org lifecycle.)
+   *
+   * Best-effort blob cleanup runs BEFORE the SQL transaction so a storage
+   * failure can't leave the DB in a half-deleted state. Orphan blobs are
+   * tolerable; orphan SQL rows are not.
+   *
+   * Emits a synthetic `audit.logged` event on the in-process bus AFTER
+   * the delete so plugins can react (notifications, downstream cleanup),
+   * but nothing about the deleted org is persisted to disk anymore.
+   */
+  async deleteOrg(principal: Principal, orgId: string): Promise<void> {
+    await this.assertOrgActor(principal);
+    if (principal.orgId !== orgId) {
+      throw new PermissionError("can only delete the principal's own org");
+    }
+    if (!principal.scopes.includes("org:admin")) {
+      throw new PermissionError("missing org:admin", {
+        capability: "org:admin",
+        resourceType: "org",
+        resourceId: orgId,
+      });
+    }
+    const orgRow = await this.queryOne("SELECT id FROM organizations WHERE id=?", [orgId]);
+    if (!orgRow) throw new NotFoundError(`org not found: ${orgId}`);
+
+    // Stream counters are keyed by stream_id (no org column), so collect the
+    // ids before we wipe the channel/thread rows.
+    const channelRows = await this.query<{ id: string }>(
+      "SELECT id FROM channels WHERE org_id=?",
+      [orgId],
+    );
+    const threadRows = await this.query<{ id: string }>(
+      "SELECT id FROM threads WHERE org_id=?",
+      [orgId],
+    );
+    const streamIds = [
+      ...channelRows.map((r) => r.id),
+      ...threadRows.map((r) => r.id),
+    ];
+
+    // Best-effort blob cleanup. Storage adapter errors are swallowed —
+    // dangling blobs are GC-able later; what we care about is making the
+    // SQL delete unconditional.
+    const artifactRows = await this.query<{ storage_key: string }>(
+      "SELECT storage_key FROM artifacts WHERE org_id=?",
+      [orgId],
+    );
+    for (const row of artifactRows) {
+      await this.storage.delete(row.storage_key).catch(() => {});
+    }
+
+    const deletedAt = this.ts();
+
+    await this.db.tx(async (tx) => {
+      // Children of messages come first.
+      await this.txQuery(
+        tx,
+        `DELETE FROM message_parts WHERE message_id IN (
+           SELECT id FROM messages WHERE org_id=?
+         )`,
+        [orgId],
+      );
+      await this.txQuery(tx, "DELETE FROM messages WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM artifacts WHERE org_id=?", [orgId]);
+      // registered_commands has FK -> actors + organizations; drop before
+      // either parent goes.
+      await this.txQuery(tx, "DELETE FROM registered_commands WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM threads WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM channels WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM memberships WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM cursors WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM grants WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM permission_requests WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM clients WHERE org_id=?", [orgId]);
+      if (streamIds.length > 0) {
+        const placeholders = streamIds.map(() => "?").join(",");
+        await this.txQuery(
+          tx,
+          `DELETE FROM stream_counters WHERE stream_id IN (${placeholders})`,
+          streamIds,
+        );
+      }
+      await this.txQuery(tx, "DELETE FROM events WHERE org_id=?", [orgId]);
+      // actors has FK -> organizations; drop before the org row.
+      await this.txQuery(tx, "DELETE FROM actors WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM audit_events WHERE org_id=?", [orgId]);
+      await this.txQuery(tx, "DELETE FROM organizations WHERE id=?", [orgId]);
+    });
+
+    // Synthetic bus event — nothing about this org persists to disk anymore,
+    // so we can't use `emit()` (which would try to write to the deleted
+    // events / audit_events rows). Plugins still see the deletion happen.
+    this.bus.publish({
+      type: "audit.logged",
+      payload: {
+        kind: "org.deleted",
+        orgId,
+        deletedByActorId: principal.actorId,
+        deletedAt,
+        channelCount: channelRows.length,
+        threadCount: threadRows.length,
+        artifactCount: artifactRows.length,
+      },
+      orgId,
+      streamId: null,
+      streamSeq: null,
+      createdAt: deletedAt,
+    });
+  }
+
   async createActor(orgId: string, actorType: ActorType, displayName: string): Promise<string> {
     if (!orgId) throw new ValidationError("orgId is required");
     if (!["human", "agent", "app"].includes(actorType)) throw new ValidationError("invalid actorType");
