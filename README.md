@@ -315,7 +315,7 @@ Accepts the token as:
 |---|---|---|
 | `envKey` | `MESSAGE_LAYER_TOKEN_SECRET` | Env variable holding the HS256 signing secret |
 | `queryName` | `token` | Query parameter name for browser clients |
-| `injectApiKey` | `false` | If `true`, also inject `x-api-key` after validation so `api-key-header-auth` accepts the request |
+| `injectApiKey` | `true` | When true (the default), inject `x-api-key` after validation so `api-key-header-auth` accepts the request. Pass `false` for a token-only deployment. |
 | `apiKeyEnvKey` | `MESSAGE_LAYER_API_KEY` | Env variable read when `injectApiKey` is true |
 | `apiKeyHeader` | `x-api-key` | Header name to inject the API key under |
 | `protectedPrefixes` | `["/v1/"]` | Path prefixes the plugin acts on |
@@ -359,20 +359,6 @@ Delivers domain events as outbound HTTP POST requests to registered subscriber U
 - Adds `POST /v1/webhooks/subscriptions` — register a webhook
 - Adds `GET /v1/webhooks/subscriptions` — list subscriptions
 - Adds `PATCH /v1/webhooks/subscriptions/:id` — enable/disable
-
-#### `telegram-bridge`
-Bridges one Telegram bot/chat to one human + one channel binding. Inbound Telegram
-messages append into message-layer as the bound human actor (`provider: "bridge:telegram"`),
-and outbound agent/app channel messages are projected back to Telegram.
-
-- Adds `POST /v1/bridges/telegram/setups` — create setup + register webhook
-- Adds `GET /v1/bridges/telegram/setups` — list setups
-- Adds `GET /v1/bridges/telegram/setups/:setupId` — read setup
-- Adds `POST /v1/bridges/telegram/setups/:setupId/disable` — disable setup
-- Adds `POST /v1/bridges/telegram/setups/:setupId/rotate-webhook-secret` — rotate Telegram webhook secret
-- Adds `POST /v1/bridges/telegram/webhook/:setupId` — Telegram ingress endpoint
-
-See `docs/spec/telegram-bridge.md` for full lifecycle, payloads, and security notes.
 
 #### `memory`
 Derives reusable **memory units** from text parts of `message.appended` events. Units are normalized, chunked, deduplicated by content hash, and tagged with extracted keywords — never a 1:1 copy of message text. Source `streamId` / `streamType` / `visibility` are snapshotted at insert time so derived data cannot widen retroactively.
@@ -501,12 +487,6 @@ Every authenticated request carries an `x-principal` JSON header. See [`docs/spe
 | `POST` | `/v1/webhooks/subscriptions` | Create webhook subscription (`webhooks` plugin) |
 | `GET` | `/v1/webhooks/subscriptions` | List webhook subscriptions (`webhooks` plugin) |
 | `PATCH` | `/v1/webhooks/subscriptions/:id` | Enable/disable webhook (`webhooks` plugin) |
-| `POST` | `/v1/bridges/telegram/setups` | Create Telegram bridge setup (`telegram-bridge` plugin) |
-| `GET` | `/v1/bridges/telegram/setups` | List Telegram bridge setups (`telegram-bridge` plugin) |
-| `GET` | `/v1/bridges/telegram/setups/:setupId` | Get one Telegram bridge setup (`telegram-bridge` plugin) |
-| `POST` | `/v1/bridges/telegram/setups/:setupId/disable` | Disable Telegram bridge setup (`telegram-bridge` plugin) |
-| `POST` | `/v1/bridges/telegram/setups/:setupId/rotate-webhook-secret` | Rotate Telegram bridge webhook secret (`telegram-bridge` plugin) |
-| `POST` | `/v1/bridges/telegram/webhook/:setupId` | Telegram webhook ingress (`telegram-bridge` plugin) |
 | `GET` | `/v1/memory?streamId=…` | List memory units bound to a stream (`memory` plugin) |
 | `GET` | `/v1/memory/search?q=…` | Lexical search over visible memory (`memory` plugin) |
 | `GET` | `/v1/memory/:id` | Fetch one memory unit (`memory` plugin) |

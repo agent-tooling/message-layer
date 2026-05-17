@@ -53,9 +53,10 @@ export type PrincipalTokenAuthOptions = {
   envKey?: string;
   /** Query parameter to read the token from. Default `token`. */
   queryName?: string;
-  /** When true, validated requests also receive an injected `x-api-key` so a
-   * coexisting `api-key-header-auth` plugin lets them through. The value is
-   * read from `apiKeyEnvKey` (default `MESSAGE_LAYER_API_KEY`). */
+  /** When true (the default), validated requests also receive an injected
+   * `x-api-key` so a coexisting `api-key-header-auth` plugin lets them
+   * through. The value is read from `apiKeyEnvKey` (default
+   * `MESSAGE_LAYER_API_KEY`). Pass `false` to disable. */
   injectApiKey?: boolean;
   /** Env var of the API key to inject when `injectApiKey` is true. */
   apiKeyEnvKey?: string;
@@ -215,7 +216,12 @@ export function principalTokenAuthPlugin(
   const apiKeyEnvKey = options.apiKeyEnvKey ?? "MESSAGE_LAYER_API_KEY";
   const protectedPrefixes = options.protectedPrefixes ?? ["/v1/"];
   const replayWindowSeconds = options.replayWindowSeconds ?? 0;
-  const injectApiKey = options.injectApiKey === true;
+  // Default `injectApiKey` to true: the whole point of this plugin is to
+  // let browser clients (which can't set headers on WebSocket() upgrades
+  // and don't hold the long-lived API key) reach a server that also has
+  // `api-key-header-auth` enabled. Opt out with `{ injectApiKey: false }`
+  // for a token-only deployment.
+  const injectApiKey = options.injectApiKey !== false;
 
   const replay = new ReplayWindow(replayWindowSeconds);
   let capturedEnv: NodeJS.ProcessEnv | null = null;

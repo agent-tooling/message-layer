@@ -38,7 +38,6 @@ describe("principal-token-auth", () => {
             name: "principal-token-auth",
             options: {
               envKey: "ML_TOKEN_TEST_SECRET",
-              injectApiKey: true,
               apiKeyEnvKey: "ML_TOKEN_TEST_API_KEY",
               replayWindowSeconds: 300,
             },
